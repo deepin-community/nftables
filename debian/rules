@@ -1,0 +1,30 @@
+#!/usr/bin/make -f
+
+ifeq (,$(filter terse,$(DEB_BUILD_OPTIONS)))
+export DH_VERBOSE=1
+endif
+export PYBUILD_NAME = nftables
+export DEB_BUILD_MAINT_OPTIONS = hardening=+all
+
+configure_opts := --with-xtables --with-json --with-python-bin=/usr/bin/python3 --with-cli=editline
+
+override_dh_auto_configure:
+	dh_auto_configure -- $(configure_opts) --
+
+%:
+	dh $@ --with python3
+
+override_dh_fixperms:
+	dh_fixperms
+	chmod a+x debian/nftables/etc/nftables.conf
+
+override_dh_installsystemd:
+	dh_installsystemd --no-enable --no-start
+
+override_dh_installinit:
+	# dh_installinit will try to mess with /etc/init.d/nftables in
+	# the maintainer scripts, but we don't ship it
+	dh_installinit -n
+
+override_dh_installexamples:
+	dh_installexamples -XMakefile
