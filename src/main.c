@@ -8,12 +8,12 @@
  * Development of this code funded by Astaro AG (http://www.astaro.com/)
  */
 
-#include <stdlib.h>
+#include <nft.h>
+
 #include <stddef.h>
 #include <unistd.h>
 #include <stdio.h>
 #include <errno.h>
-#include <string.h>
 #include <getopt.h>
 #include <fcntl.h>
 #include <sys/types.h>
@@ -36,7 +36,8 @@ enum opt_indices {
 	IDX_INTERACTIVE,
         IDX_INCLUDEPATH,
 	IDX_CHECK,
-#define IDX_RULESET_INPUT_END	IDX_CHECK
+	IDX_OPTIMIZE,
+#define IDX_RULESET_INPUT_END	IDX_OPTIMIZE
         /* Ruleset list formatting */
         IDX_HANDLE,
 #define IDX_RULESET_LIST_START	IDX_HANDLE
@@ -80,6 +81,7 @@ enum opt_vals {
 	OPT_NUMERIC_PROTO	= 'p',
 	OPT_NUMERIC_TIME	= 'T',
 	OPT_TERSE		= 't',
+	OPT_OPTIMIZE		= 'o',
 	OPT_INVALID		= '?',
 };
 
@@ -136,6 +138,8 @@ static const struct nft_opt nft_options[] = {
 				     "Format output in JSON"),
 	[IDX_DEBUG]	    = NFT_OPT("debug",			OPT_DEBUG,		"<level [,level...]>",
 				     "Specify debugging level (scanner, parser, eval, netlink, mnl, proto-ctx, segtree, all)"),
+	[IDX_OPTIMIZE]	    = NFT_OPT("optimize",		OPT_OPTIMIZE,		NULL,
+				     "Optimize ruleset"),
 };
 
 #define NR_NFT_OPTIONS (sizeof(nft_options) / sizeof(nft_options[0]))
@@ -357,11 +361,15 @@ int main(int argc, char * const *argv)
 	const struct option *options = get_options();
 	bool interactive = false, define = false;
 	const char *optstring = get_optstring();
-	char *buf = NULL, *filename = NULL;
 	unsigned int output_flags = 0;
+	int i, val, rc = EXIT_SUCCESS;
 	unsigned int debug_mask;
+	char *filename = NULL;
 	unsigned int len;
-	int i, val, rc;
+
+	/* nftables cannot be used with setuid in a safe way. */
+	if (getuid() != geteuid())
+		_exit(111);
 
 	if (!nft_options_check(argc, argv))
 		exit(EXIT_FAILURE);
@@ -376,20 +384,20 @@ int main(int argc, char * const *argv)
 		switch (val) {
 		case OPT_HELP:
 			show_help(argv[0]);
-			exit(EXIT_SUCCESS);
+			goto out;
 		case OPT_VERSION:
 			printf("%s v%s (%s)\n",
 			       PACKAGE_NAME, PACKAGE_VERSION, RELEASE_NAME);
-			exit(EXIT_SUCCESS);
+			goto out;
 		case OPT_VERSION_LONG:
 			show_version();
-			exit(EXIT_SUCCESS);
+			goto out;
 		case OPT_DEFINE:
 			if (nft_ctx_add_var(nft, optarg)) {
 				fprintf(stderr,
 					"Failed to define variable '%s'\n",
 					optarg);
-				exit(EXIT_FAILURE);
+				goto out_fail;
 			}
 			define = true;
 			break;
@@ -397,9 +405,19 @@ int main(int argc, char * const *argv)
 			nft_ctx_set_dry_run(nft, true);
 			break;
 		case OPT_FILE:
+			if (interactive) {
+				fprintf(stderr,
+					"Error: -i/--interactive and -f/--file options cannot be combined\n");
+				goto out_fail;
+			}
 			filename = optarg;
 			break;
 		case OPT_INTERACTIVE:
+			if (filename) {
+				fprintf(stderr,
+					"Error: -i/--interactive and -f/--file options cannot be combined\n");
+				goto out_fail;
+			}
 			interactive = true;
 			break;
 		case OPT_INCLUDEPATH:
@@ -407,7 +425,7 @@ int main(int argc, char * const *argv)
 				fprintf(stderr,
 					"Failed to add include path '%s'\n",
 					optarg);
-				exit(EXIT_FAILURE);
+				goto out_fail;
 			}
 			break;
 		case OPT_NUMERIC:
@@ -442,7 +460,7 @@ int main(int argc, char * const *argv)
 				if (i == array_size(debug_param)) {
 					fprintf(stderr, "invalid debug parameter `%s'\n",
 						optarg);
-					exit(EXIT_FAILURE);
+					goto out_fail;
 				}
 
 				if (end == NULL)
@@ -462,7 +480,7 @@ int main(int argc, char * const *argv)
 			output_flags |= NFT_CTX_OUTPUT_JSON;
 #else
 			fprintf(stderr, "JSON support not compiled-in\n");
-			exit(EXIT_FAILURE);
+			goto out_fail;
 #endif
 			break;
 		case OPT_GUID:
@@ -480,19 +498,24 @@ int main(int argc, char * const *argv)
 		case OPT_TERSE:
 			output_flags |= NFT_CTX_OUTPUT_TERSE;
 			break;
+		case OPT_OPTIMIZE:
+			nft_ctx_set_optimize(nft, 0x1);
+			break;
 		case OPT_INVALID:
-			exit(EXIT_FAILURE);
+			goto out_fail;
 		}
 	}
 
 	if (!filename && define) {
 		fprintf(stderr, "Error: -D/--define can only be used with -f/--filename\n");
-		exit(EXIT_FAILURE);
+		goto out_fail;
 	}
 
 	nft_ctx_output_set_flags(nft, output_flags);
 
 	if (optind != argc) {
+		char *buf;
+
 		for (len = 0, i = optind; i < argc; i++)
 			len += strlen(argv[i]) + strlen(" ");
 
@@ -500,7 +523,7 @@ int main(int argc, char * const *argv)
 		if (buf == NULL) {
 			fprintf(stderr, "%s:%u: Memory allocation failure\n",
 				__FILE__, __LINE__);
-			exit(EXIT_FAILURE);
+			goto out_fail;
 		}
 		for (i = optind; i < argc; i++) {
 			strcat(buf, argv[i]);
@@ -508,22 +531,24 @@ int main(int argc, char * const *argv)
 				strcat(buf, " ");
 		}
 		rc = !!nft_run_cmd_from_buffer(nft, buf);
+		free(buf);
 	} else if (filename != NULL) {
 		rc = !!nft_run_cmd_from_filename(nft, filename);
 	} else if (interactive) {
 		if (cli_init(nft) < 0) {
 			fprintf(stderr, "%s: interactive CLI not supported in this build\n",
 				argv[0]);
-			exit(EXIT_FAILURE);
+			goto out_fail;
 		}
-		return EXIT_SUCCESS;
 	} else {
 		fprintf(stderr, "%s: no command specified\n", argv[0]);
-		exit(EXIT_FAILURE);
+		goto out_fail;
 	}
 
-	free(buf);
+out:
 	nft_ctx_free(nft);
-
 	return rc;
+out_fail:
+	nft_ctx_free(nft);
+	return EXIT_FAILURE;
 }

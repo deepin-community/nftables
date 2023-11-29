@@ -8,16 +8,16 @@
  * Development of this code funded by Astaro AG (http://www.astaro.com/)
  */
 
+#include <nft.h>
+
 #include <stddef.h>
-#include <stdlib.h>
 #include <stdio.h>
-#include <stdint.h>
-#include <string.h>
 #include <limits.h>
 
 #include <expression.h>
 #include <statement.h>
 #include <datatype.h>
+#include <netlink.h>
 #include <rule.h>
 #include <gmputil.h>
 #include <utils.h>
@@ -28,6 +28,7 @@
 extern const struct expr_ops ct_expr_ops;
 extern const struct expr_ops fib_expr_ops;
 extern const struct expr_ops hash_expr_ops;
+extern const struct expr_ops inner_expr_ops;
 extern const struct expr_ops meta_expr_ops;
 extern const struct expr_ops numgen_expr_ops;
 extern const struct expr_ops osf_expr_ops;
@@ -135,12 +136,12 @@ void expr_describe(const struct expr *expr, struct output_ctx *octx)
 		nft_print(octx, "datatype %s (%s)",
 			  dtype->name, dtype->desc);
 		len = dtype->size;
-	} else if (dtype != &invalid_type) {
+	} else {
 		nft_print(octx, "%s expression, datatype %s (%s)",
 			  expr_name(expr), dtype->name, dtype->desc);
-	} else {
-		nft_print(octx, "datatype %s is invalid\n", expr->identifier);
-		return;
+
+		if (dtype == &invalid_type)
+			return;
 	}
 
 	if (dtype->basetype != NULL) {
@@ -268,6 +269,7 @@ static struct expr *verdict_expr_parse_udata(const struct nftnl_udata *attr)
 	struct expr *e;
 
 	e = symbol_expr_alloc(&internal_location, SYMBOL_VALUE, NULL, "verdict");
+	e->dtype = &verdict_type;
 	e->len = NFT_REG_SIZE * BITS_PER_BYTE;
 	return e;
 }
@@ -300,8 +302,7 @@ struct expr *verdict_expr_alloc(const struct location *loc,
 
 static void symbol_expr_print(const struct expr *expr, struct output_ctx *octx)
 {
-	nft_print(octx, "%s%s", expr->scope != NULL ? "$" : "",
-		  expr->identifier);
+	nft_print(octx, "%s", expr->identifier);
 }
 
 static void symbol_expr_clone(struct expr *new, const struct expr *expr)
@@ -878,17 +879,30 @@ static void concat_expr_print(const struct expr *expr, struct output_ctx *octx)
 #define NFTNL_UDATA_SET_KEY_CONCAT_SUB_DATA 1
 #define NFTNL_UDATA_SET_KEY_CONCAT_SUB_MAX  2
 
+static struct expr *expr_build_udata_recurse(struct expr *e)
+{
+	switch (e->etype) {
+	case EXPR_BINOP:
+		return e->left;
+	default:
+		break;
+	}
+
+	return e;
+}
+
 static int concat_expr_build_udata(struct nftnl_udata_buf *udbuf,
 				    const struct expr *concat_expr)
 {
 	struct nftnl_udata *nest;
+	struct expr *expr, *tmp;
 	unsigned int i = 0;
-	struct expr *expr;
 
-	list_for_each_entry(expr, &concat_expr->expressions, list) {
+	list_for_each_entry_safe(expr, tmp, &concat_expr->expressions, list) {
 		struct nftnl_udata *nest_expr;
 		int err;
 
+		expr = expr_build_udata_recurse(expr);
 		if (!expr_ops(expr)->build_udata || i >= NFT_REG32_SIZE)
 			return -1;
 
@@ -950,7 +964,7 @@ static struct expr *concat_expr_parse_udata(const struct nftnl_udata *attr)
 	const struct nftnl_udata *ud[NFTNL_UDATA_SET_KEY_CONCAT_NEST_MAX] = {};
 	const struct datatype *dtype;
 	struct expr *concat_expr;
-	uint32_t dt = 0;
+	uint32_t dt = 0, len = 0;
 	unsigned int i;
 	int err;
 
@@ -980,7 +994,7 @@ static struct expr *concat_expr_parse_udata(const struct nftnl_udata *attr)
 			goto err_free;
 
 		etype = nftnl_udata_get_u32(nest_ud[NFTNL_UDATA_SET_KEY_CONCAT_SUB_TYPE]);
-		ops = expr_ops_by_type(etype);
+		ops = expr_ops_by_type_u32(etype);
 		if (!ops || !ops->parse_udata)
 			goto err_free;
 
@@ -991,14 +1005,15 @@ static struct expr *concat_expr_parse_udata(const struct nftnl_udata *attr)
 
 		dt = concat_subtype_add(dt, expr->dtype->type);
 		compound_expr_add(concat_expr, expr);
+		len += netlink_padded_len(expr->len);
 	}
 
 	dtype = concat_type_alloc(dt);
 	if (!dtype)
 		goto err_free;
 
-	concat_expr->dtype = datatype_get(dtype);
-	concat_expr->len = dtype->size;
+	__datatype_set(concat_expr, dtype);
+	concat_expr->len = len;
 
 	return concat_expr;
 
@@ -1186,14 +1201,40 @@ struct expr *mapping_expr_alloc(const struct location *loc,
 	return expr;
 }
 
+static bool __set_expr_is_vmap(const struct expr *mappings)
+{
+	const struct expr *mapping;
+
+	if (list_empty(&mappings->expressions))
+		return false;
+
+	mapping = list_first_entry(&mappings->expressions, struct expr, list);
+	if (mapping->etype == EXPR_MAPPING &&
+	    mapping->right->etype == EXPR_VERDICT)
+		return true;
+
+	return false;
+}
+
+static bool set_expr_is_vmap(const struct expr *expr)
+{
+
+	if (expr->mappings->etype == EXPR_SET)
+		return __set_expr_is_vmap(expr->mappings);
+
+	return false;
+}
+
 static void map_expr_print(const struct expr *expr, struct output_ctx *octx)
 {
 	expr_print(expr->map, octx);
-	if (expr->mappings->etype == EXPR_SET_REF &&
-	    expr->mappings->set->data->dtype->type == TYPE_VERDICT)
+	if ((expr->mappings->etype == EXPR_SET_REF &&
+	     expr->mappings->set->data->dtype->type == TYPE_VERDICT) ||
+	    set_expr_is_vmap(expr))
 		nft_print(octx, " vmap ");
 	else
 		nft_print(octx, " map ");
+
 	expr_print(expr->mappings, octx);
 }
 
@@ -1300,14 +1341,19 @@ static void set_elem_expr_destroy(struct expr *expr)
 		stmt_free(stmt);
 }
 
-static void set_elem_expr_clone(struct expr *new, const struct expr *expr)
+static void __set_elem_expr_clone(struct expr *new, const struct expr *expr)
 {
-	new->key = expr_clone(expr->key);
 	new->expiration = expr->expiration;
 	new->timeout = expr->timeout;
 	if (expr->comment)
 		new->comment = xstrdup(expr->comment);
 	init_list_head(&new->stmt_list);
+}
+
+static void set_elem_expr_clone(struct expr *new, const struct expr *expr)
+{
+	new->key = expr_clone(expr->key);
+	__set_elem_expr_clone(new, expr);
 }
 
 static const struct expr_ops set_elem_expr_ops = {
@@ -1337,11 +1383,17 @@ static void set_elem_catchall_expr_print(const struct expr *expr,
 	nft_print(octx, "*");
 }
 
+static void set_elem_catchall_expr_clone(struct expr *new, const struct expr *expr)
+{
+	__set_elem_expr_clone(new, expr);
+}
+
 static const struct expr_ops set_elem_catchall_expr_ops = {
 	.type		= EXPR_SET_ELEM_CATCHALL,
 	.name		= "catch-all set element",
 	.print		= set_elem_catchall_expr_print,
 	.json		= set_elem_catchall_expr_json,
+	.clone		= set_elem_catchall_expr_clone,
 };
 
 struct expr *set_elem_catchall_expr_alloc(const struct location *loc)
@@ -1437,6 +1489,7 @@ void range_expr_value_high(mpz_t rop, const struct expr *expr)
 		return mpz_set(rop, expr->value);
 	case EXPR_PREFIX:
 		range_expr_value_low(rop, expr->prefix);
+		assert(expr->len >= expr->prefix_len);
 		mpz_init_bitmask(tmp, expr->len - expr->prefix_len);
 		mpz_add(rop, rop, tmp);
 		mpz_clear(tmp);
@@ -1455,9 +1508,7 @@ void range_expr_value_high(mpz_t rop, const struct expr *expr)
 static const struct expr_ops *__expr_ops_by_type(enum expr_types etype)
 {
 	switch (etype) {
-	case EXPR_INVALID:
-		BUG("Invalid expression ops requested");
-		break;
+	case EXPR_INVALID: break;
 	case EXPR_VERDICT: return &verdict_expr_ops;
 	case EXPR_SYMBOL: return &symbol_expr_ops;
 	case EXPR_VARIABLE: return &variable_expr_ops;
@@ -1489,20 +1540,23 @@ static const struct expr_ops *__expr_ops_by_type(enum expr_types etype)
 	case EXPR_FLAGCMP: return &flagcmp_expr_ops;
 	}
 
-	BUG("Unknown expression type %d\n", etype);
+	return NULL;
 }
 
 const struct expr_ops *expr_ops(const struct expr *e)
 {
-	return __expr_ops_by_type(e->etype);
+	const struct expr_ops *ops;
+
+	ops = __expr_ops_by_type(e->etype);
+	if (!ops)
+		BUG("Unknown expression type %d\n", e->etype);
+
+	return ops;
 }
 
-const struct expr_ops *expr_ops_by_type(uint32_t value)
+const struct expr_ops *expr_ops_by_type_u32(uint32_t value)
 {
-	/* value might come from unreliable source, such as "udata"
-	 * annotation of set keys.  Avoid BUG() assertion.
-	 */
-	if (value == EXPR_INVALID || value > EXPR_MAX)
+	if (value > EXPR_MAX)
 		return NULL;
 
 	return __expr_ops_by_type(value);

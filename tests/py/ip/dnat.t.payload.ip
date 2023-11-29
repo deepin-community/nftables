@@ -167,3 +167,38 @@ ip
   [ immediate reg 4 0x00002723 ]
   [ nat dnat ip addr_min reg 1 addr_max reg 2 proto_min reg 3 proto_max reg 4 flags 0x2 ]
 
+# ip daddr 192.168.0.1 dnat ip to tcp dport map { 443 : 10.141.10.4 . 8443, 80 : 10.141.10.4 . 8080 }
+__map%d test-ip4 b size 2
+__map%d test-ip4 0
+        element 0000bb01  : 040a8d0a 0000fb20 0 [end]   element 00005000  : 040a8d0a 0000901f 0 [end]
+ip
+  [ payload load 4b @ network header + 16 => reg 1 ]
+  [ cmp eq reg 1 0x0100a8c0 ]
+  [ meta load l4proto => reg 1 ]
+  [ cmp eq reg 1 0x00000006 ]
+  [ payload load 2b @ transport header + 2 => reg 1 ]
+  [ lookup reg 1 set __map%d dreg 1 ]
+  [ nat dnat ip addr_min reg 1 proto_min reg 9 ]
+
+# meta l4proto 6 dnat ip to iifname . ip saddr map { "enp2s0" . 10.1.1.136 : 1.1.2.69 . 22, "enp2s0" . 10.1.1.1-10.1.1.135 : 1.1.2.66-1.84.236.78 . 22 }
+__map%d test-ip4 8f size 2
+__map%d test-ip4 0
+        element 32706e65 00003073 00000000 00000000 8801010a  - 32706e65 00003073 00000000 00000000 8801010a  : 45020101 00001600 45020101 00001600 0 [end]     element 32706e65 00003073 00000000 00000000 0101010a  - 32706e65 00003073 00000000 00000000 8701010a  : 42020101 00001600 4eec5401 00001600 0 [end]
+ip test-ip4 prerouting
+  [ meta load l4proto => reg 1 ]
+  [ cmp eq reg 1 0x00000006 ]
+  [ meta load iifname => reg 1 ]
+  [ payload load 4b @ network header + 12 => reg 2 ]
+  [ lookup reg 1 set __map%d dreg 1 ]
+  [ nat dnat ip addr_min reg 1 addr_max reg 10 proto_min reg 9 proto_max reg 11 ]
+
+# dnat ip to iifname . ip saddr map { "enp2s0" . 10.1.1.136 : 1.1.2.69/32, "enp2s0" . 10.1.1.1-10.1.1.135 : 1.1.2.66-1.84.236.78 }
+__map%d test-ip4 8f size 2
+__map%d test-ip4 0
+        element 32706e65 00003073 00000000 00000000 8801010a  - 32706e65 00003073 00000000 00000000 8801010a  : 45020101 45020101 0 [end]       element 32706e65 00003073 00000000 00000000 0101010a  - 32706e65 00003073 00000000 00000000 8701010a  : 42020101 4eec5401 0 [end]
+ip test-ip4 prerouting
+  [ meta load iifname => reg 1 ]
+  [ payload load 4b @ network header + 12 => reg 2 ]
+  [ lookup reg 1 set __map%d dreg 1 ]
+  [ nat dnat ip addr_min reg 1 addr_max reg 9 ]
+

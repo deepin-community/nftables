@@ -39,12 +39,28 @@ struct netlink_parse_ctx {
 	struct stmt		*stmt;
 	struct expr		*registers[MAX_REGS + 1];
 	unsigned int		debug_mask;
+	struct netlink_ctx	*nlctx;
+	bool			inner;
+	uint8_t			inner_reg;
+};
+
+
+#define RULE_PP_IN_CONCATENATION	(1 << 0)
+#define RULE_PP_IN_SET_ELEM		(1 << 1)
+
+#define RULE_PP_REMOVE_OP_AND		(RULE_PP_IN_CONCATENATION | \
+					 RULE_PP_IN_SET_ELEM)
+
+struct dl_proto_ctx {
+	struct proto_ctx	pctx;
+	struct payload_dep_ctx	pdctx;
 };
 
 struct rule_pp_ctx {
-	struct proto_ctx	pctx;
-	struct payload_dep_ctx	pdctx;
+	struct dl_proto_ctx	_dl[2];
+	struct dl_proto_ctx	*dl;
 	struct stmt		*stmt;
+	unsigned int		flags;
 };
 
 extern const struct input_descriptor indesc_netlink;
@@ -68,10 +84,13 @@ struct netlink_ctx {
 	const void		*data;
 	uint32_t		seqnum;
 	struct nftnl_batch	*batch;
+	int			maybe_emsgsize;
 };
 
 extern struct nftnl_expr *alloc_nft_expr(const char *name);
 extern void alloc_setelem_cache(const struct expr *set, struct nftnl_set *nls);
+struct nftnl_set_elem *alloc_nftnl_setelem(const struct expr *set,
+					   const struct expr *expr);
 
 extern struct nftnl_table *netlink_table_alloc(const struct nlmsghdr *nlh);
 extern struct nftnl_chain *netlink_chain_alloc(const struct nlmsghdr *nlh);
@@ -122,8 +141,6 @@ extern struct expr *netlink_alloc_data(const struct location *loc,
 				       const struct nft_data_delinearize *nld,
 				       enum nft_registers dreg);
 
-extern int netlink_list_rules(struct netlink_ctx *ctx, const struct handle *h);
-
 struct netlink_linearize_ctx;
 extern void netlink_linearize_rule(struct netlink_ctx *ctx,
 				   const struct rule *rule,
@@ -135,7 +152,8 @@ extern int netlink_list_chains(struct netlink_ctx *ctx, const struct handle *h);
 extern struct chain *netlink_delinearize_chain(struct netlink_ctx *ctx,
 					       const struct nftnl_chain *nlc);
 
-extern int netlink_list_tables(struct netlink_ctx *ctx, const struct handle *h);
+extern int netlink_list_tables(struct netlink_ctx *ctx, const struct handle *h,
+			       const struct nft_cache_filter *filter);
 extern struct table *netlink_delinearize_table(struct netlink_ctx *ctx,
 					       const struct nftnl_table *nlt);
 
@@ -147,10 +165,11 @@ extern struct stmt *netlink_parse_set_expr(const struct set *set,
 					   const struct nftnl_expr *nle);
 
 extern int netlink_list_setelems(struct netlink_ctx *ctx,
-				 const struct handle *h, struct set *set);
+				 const struct handle *h, struct set *set,
+				 bool reset);
 extern int netlink_get_setelem(struct netlink_ctx *ctx, const struct handle *h,
 			       const struct location *loc, struct set *cache_set,
-			       struct set *set, struct expr *init);
+			       struct set *set, struct expr *init, bool reset);
 extern int netlink_delinearize_setelem(struct nftnl_set_elem *nlse,
 				       struct set *set,
 				       struct nft_cache *cache);
@@ -165,6 +184,9 @@ extern int netlink_list_flowtables(struct netlink_ctx *ctx,
 				   const struct handle *h);
 extern struct flowtable *netlink_delinearize_flowtable(struct netlink_ctx *ctx,
 						       struct nftnl_flowtable *nlo);
+
+extern int netlink_reset_rules(struct netlink_ctx *ctx, const struct cmd *cmd,
+			       bool dump);
 
 extern void netlink_dump_chain(const struct nftnl_chain *nlc,
 			       struct netlink_ctx *ctx);
@@ -215,9 +237,6 @@ int netlink_events_trace_cb(const struct nlmsghdr *nlh, int type,
 
 enum nft_data_types dtype_map_to_kernel(const struct datatype *dtype);
 
-void expr_handler_init(void);
-void expr_handler_exit(void);
-
 void netlink_linearize_init(struct netlink_linearize_ctx *lctx,
 			    struct nftnl_rule *nlr);
 void netlink_linearize_fini(struct netlink_linearize_ctx *lctx);
@@ -238,5 +257,7 @@ struct nft_expr_loc {
 
 struct nft_expr_loc *nft_expr_loc_find(const struct nftnl_expr *nle,
 				       struct netlink_linearize_ctx *ctx);
+
+struct dl_proto_ctx *dl_proto_ctx(struct rule_pp_ctx *ctx);
 
 #endif /* NFTABLES_NETLINK_H */

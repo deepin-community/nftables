@@ -23,6 +23,14 @@ VLAN HEADER EXPRESSION
 [verse]
 *vlan* {*id* | *dei* | *pcp* | *type*}
 
+The vlan expression is used to match on the vlan header fields.
+This expression will not work in the *ip*, *ip6* and *inet* families,
+unless the vlan interface is configured with the *reorder_hdr off* setting.
+The default is *reorder_hdr on* which will automatically remove the vlan tag
+from the packet. See ip-link(8) for more information.
+For these families its easier to match the vlan interface name
+instead, using the *meta iif* or *meta iifname* expression.
+
 .VLAN header expression
 [options="header"]
 |==================
@@ -125,6 +133,14 @@ ipv4_addr
 Destination address |
 ipv4_addr
 |======================
+
+Careful with matching on *ip length*: If GRO/GSO is enabled, then the Linux
+kernel might aggregate several packets into one big packet that is larger than
+MTU. Moreover, if GRO/GSO maximum size is larger than 65535 (see man ip-link(8),
+specifically gro_ipv6_max_size and gso_ipv6_max_size), then *ip length* might
+be 0 for such jumbo packets. *meta length* allows you to match on the packet
+length including the IP header size.  If you want to perform heuristics on the
+*ip length* field, then disable GRO/GSO.
 
 ICMP HEADER EXPRESSION
 ~~~~~~~~~~~~~~~~~~~~~~
@@ -236,6 +252,14 @@ Destination address |
 ipv6_addr
 |=======================
 
+Careful with matching on *ip6 length*: If GRO/GSO is enabled, then the Linux
+kernel might aggregate several packets into one big packet that is larger than
+MTU. Moreover, if GRO/GSO maximum size is larger than 65535 (see man ip-link(8),
+specifically gro_ipv6_max_size and gso_ipv6_max_size), then *ip6 length* might
+be 0 for such jumbo packets. *meta length* allows you to match on the packet
+length including the IP header size.  If you want to perform heuristics on the
+*ip6 length* field, then disable GRO/GSO.
+
 .Using ip6 header expressions
 -----------------------------
 # matching if first extension header indicates a fragment
@@ -245,7 +269,7 @@ ip6 nexthdr ipv6-frag
 ICMPV6 HEADER EXPRESSION
 ~~~~~~~~~~~~~~~~~~~~~~~~
 [verse]
-*icmpv6* {*type* | *code* | *checksum* | *parameter-problem* | *packet-too-big* | *id* | *sequence* | *max-delay*}
+*icmpv6* {*type* | *code* | *checksum* | *parameter-problem* | *packet-too-big* | *id* | *sequence* | *max-delay* | *taddr* | *daddr*}
 
 This expression refers to ICMPv6 header fields. When using it in *inet*,
 *bridge* or *netdev* families, it will cause an implicit dependency on IPv6 to
@@ -280,6 +304,12 @@ integer (16 bit)
 |max-delay|
 maximum response delay of MLD queries|
 integer (16 bit)
+|taddr|
+target address of neighbor solicit/advert, redirect or MLD|
+ipv6_addr
+|daddr|
+destination address of redirect|
+ipv6_addr
 |==============================
 
 TCP HEADER EXPRESSION
@@ -524,6 +554,160 @@ compression Parameter Index |
 integer (16 bit)
 |============================
 
+GRE HEADER EXPRESSION
+~~~~~~~~~~~~~~~~~~~~~~~
+[verse]
+*gre* {*flags* | *version* | *protocol*}
+*gre* *ip* {*version* | *hdrlength* | *dscp* | *ecn* | *length* | *id* | *frag-off* | *ttl* | *protocol* | *checksum* | *saddr* | *daddr* }
+*gre* *ip6* {*version* | *dscp* | *ecn* | *flowlabel* | *length* | *nexthdr* | *hoplimit* | *saddr* | *daddr*}
+
+The gre expression is used to match on the gre header fields. This expression
+also allows to match on the IPv4 or IPv6 packet within the gre header.
+
+.GRE header expression
+[options="header"]
+|==================
+|Keyword| Description| Type
+|flags|
+checksum, routing, key, sequence and strict source route flags|
+integer (5 bit)
+|version|
+gre version field, 0 for GRE and 1 for PPTP|
+integer (3 bit)
+|protocol|
+EtherType of encapsulated packet|
+integer (16 bit)
+|==================
+
+.Matching inner IPv4 destination address encapsulated in gre
+------------------------------------------------------------
+netdev filter ingress gre ip daddr 9.9.9.9 counter
+------------------------------------------------------------
+
+GENEVE HEADER EXPRESSION
+~~~~~~~~~~~~~~~~~~~~~~~~
+[verse]
+*geneve* {*vni* | *flags*}
+*geneve* *ether* {*daddr* | *saddr* | *type*}
+*geneve* *vlan* {*id* | *dei* | *pcp* | *type*}
+*geneve* *ip* {*version* | *hdrlength* | *dscp* | *ecn* | *length* | *id* | *frag-off* | *ttl* | *protocol* | *checksum* | *saddr* | *daddr* }
+*geneve* *ip6* {*version* | *dscp* | *ecn* | *flowlabel* | *length* | *nexthdr* | *hoplimit* | *saddr* | *daddr*}
+*geneve* *tcp* {*sport* | *dport* | *sequence* | *ackseq* | *doff* | *reserved* | *flags* | *window* | *checksum* | *urgptr*}
+*geneve* *udp* {*sport* | *dport* | *length* | *checksum*}
+
+The geneve expression is used to match on the geneve header fields. The geneve
+header encapsulates a ethernet frame within a *udp* packet. This expression
+requires that you restrict the matching to *udp* packets (usually at
+port 6081 according to IANA-assigned ports).
+
+.GENEVE header expression
+[options="header"]
+|==================
+|Keyword| Description| Type
+|protocol|
+EtherType of encapsulated packet|
+integer (16 bit)
+|vni|
+Virtual Network ID (VNI)|
+integer (24 bit)
+|==================
+
+.Matching inner TCP destination port encapsulated in geneve
+----------------------------------------------------------
+netdev filter ingress udp dport 4789 geneve tcp dport 80 counter
+----------------------------------------------------------
+
+GRETAP HEADER EXPRESSION
+~~~~~~~~~~~~~~~~~~~~~~~~
+[verse]
+*gretap* {*vni* | *flags*}
+*gretap* *ether* {*daddr* | *saddr* | *type*}
+*gretap* *vlan* {*id* | *dei* | *pcp* | *type*}
+*gretap* *ip* {*version* | *hdrlength* | *dscp* | *ecn* | *length* | *id* | *frag-off* | *ttl* | *protocol* | *checksum* | *saddr* | *daddr* }
+*gretap* *ip6* {*version* | *dscp* | *ecn* | *flowlabel* | *length* | *nexthdr* | *hoplimit* | *saddr* | *daddr*}
+*gretap* *tcp* {*sport* | *dport* | *sequence* | *ackseq* | *doff* | *reserved* | *flags* | *window* | *checksum* | *urgptr*}
+*gretap* *udp* {*sport* | *dport* | *length* | *checksum*}
+
+The gretap expression is used to match on the encapsulated ethernet frame
+within the gre header. Use the *gre* expression to match on the *gre* header
+fields.
+
+.Matching inner TCP destination port encapsulated in gretap
+----------------------------------------------------------
+netdev filter ingress gretap tcp dport 80 counter
+----------------------------------------------------------
+
+VXLAN HEADER EXPRESSION
+~~~~~~~~~~~~~~~~~~~~~~~
+[verse]
+*vxlan* {*vni* | *flags*}
+*vxlan* *ether* {*daddr* | *saddr* | *type*}
+*vxlan* *vlan* {*id* | *dei* | *pcp* | *type*}
+*vxlan* *ip* {*version* | *hdrlength* | *dscp* | *ecn* | *length* | *id* | *frag-off* | *ttl* | *protocol* | *checksum* | *saddr* | *daddr* }
+*vxlan* *ip6* {*version* | *dscp* | *ecn* | *flowlabel* | *length* | *nexthdr* | *hoplimit* | *saddr* | *daddr*}
+*vxlan* *tcp* {*sport* | *dport* | *sequence* | *ackseq* | *doff* | *reserved* | *flags* | *window* | *checksum* | *urgptr*}
+*vxlan* *udp* {*sport* | *dport* | *length* | *checksum*}
+
+The vxlan expression is used to match on the vxlan header fields. The vxlan
+header encapsulates a ethernet frame within a *udp* packet. This expression
+requires that you restrict the matching to *udp* packets (usually at
+port 4789 according to IANA-assigned ports).
+
+.VXLAN header expression
+[options="header"]
+|==================
+|Keyword| Description| Type
+|flags|
+vxlan flags|
+integer (8 bit)
+|vni|
+Virtual Network ID (VNI)|
+integer (24 bit)
+|==================
+
+.Matching inner TCP destination port encapsulated in vxlan
+----------------------------------------------------------
+netdev filter ingress udp dport 4789 vxlan tcp dport 80 counter
+----------------------------------------------------------
+
+ARP HEADER EXPRESSION
+~~~~~~~~~~~~~~~~~~~~~
+[verse]
+*arp* {*htype* | *ptype* | *hlen* | *plen* | *operation* | *saddr* { *ip* | *ether* } | *daddr* { *ip* | *ether* }
+
+.ARP header expression
+[options="header"]
+|==================
+|Keyword| Description| Type
+|htype|
+ARP hardware type|
+integer (16 bit)
+|ptype|
+EtherType|
+ether_type
+|hlen|
+Hardware address len|
+integer (8 bit)
+|plen|
+Protocol address len |
+integer (8 bit)
+|operation|
+Operation |
+arp_op
+|saddr ether|
+Ethernet sender address|
+ether_addr
+|daddr ether|
+Ethernet target address|
+ether_addr
+|saddr ip|
+IPv4 sender address|
+ipv4_addr
+|daddr ip|
+IPv4 target address|
+ipv4_addr
+|======================
+
 RAW PAYLOAD EXPRESSION
 ~~~~~~~~~~~~~~~~~~~~~~
 [verse]
@@ -548,6 +732,8 @@ Link layer, for example the Ethernet header
 Network header, for example IPv4 or IPv6
 |th|
 Transport Header, for example TCP
+|ih|
+Inner Header / Payload, i.e. after the L4 transport level header
 |==============================
 
 .Matching destination port of both UDP and TCP
@@ -589,6 +775,7 @@ The following syntaxes are valid only in a relational expression with boolean ty
 *exthdr* {*hbh* | *frag* | *rt* | *dst* | *mh*}
 *tcp option* {*eol* | *nop* | *maxseg* | *window* | *sack-perm* | *sack* | *sack0* | *sack1* | *sack2* | *sack3* | *timestamp*}
 *ip option* { lsrr | ra | rr | ssrr }
+*dccp option* 'dccp_option_type'
 
 .IPv6 extension headers
 [options="header"]
@@ -614,37 +801,37 @@ Segment Routing Header
 |Keyword| Description | TCP option fields
 |eol|
 End if option list|
-kind
+-
 |nop|
 1 Byte TCP Nop padding option |
-kind
+-
 |maxseg|
 TCP Maximum Segment Size|
-kind, length, size
+length, size
 |window|
 TCP Window Scaling |
-kind, length, count
+length, count
 |sack-perm |
 TCP SACK permitted |
-kind, length
+length
 |sack|
 TCP Selective Acknowledgement (alias of block 0) |
-kind, length, left, right
+length, left, right
 |sack0|
 TCP Selective Acknowledgement (block 0) |
-kind, length, left, right
+length, left, right
 |sack1|
 TCP Selective Acknowledgement (block 1) |
-kind, length, left, right
+length, left, right
 |sack2|
 TCP Selective Acknowledgement (block 2) |
-kind, length, left, right
+length, left, right
 |sack3|
 TCP Selective Acknowledgement (block 3) |
-kind, length, left, right
+length, left, right
 |timestamp|
 TCP Timestamps |
-kind, length, tsval, tsecr
+length, tsval, tsecr
 |============================
 
 TCP option matching also supports raw expression syntax to access arbitrary options:
@@ -673,7 +860,12 @@ type, length, ptr, addr
 
 .finding TCP options
 --------------------
-filter input tcp option sack-perm kind 1 counter
+filter input tcp option sack-perm exists counter
+--------------------
+
+.matching TCP options
+--------------------
+filter input tcp option maxseg size lt 536
 --------------------
 
 .matching IPv6 exthdr
@@ -684,6 +876,11 @@ ip6 filter input frag more-fragments 1 counter
 .finding IP option
 ------------------
 filter input ip option lsrr exists counter
+---------------------------------------
+
+.finding DCCP option
+------------------
+filter input dccp option 40 exists counter
 ---------------------------------------
 
 CONNTRACK EXPRESSIONS

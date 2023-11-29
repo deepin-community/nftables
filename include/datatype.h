@@ -22,7 +22,7 @@
  * @TYPE_INET_SERVICE:	internet service (integer subtype)
  * @TYPE_ICMP_TYPE:	ICMP type codes (integer subtype)
  * @TYPE_TCP_FLAG:	TCP flag (bitmask subtype)
- * @TCPE_DCCP_PKTTYPE:	DCCP packet type (integer subtype)
+ * @TYPE_DCCP_PKTTYPE:	DCCP packet type (integer subtype)
  * @TYPE_MH_TYPE:	Mobility Header type (integer subtype)
  * @TYPE_TIME:		relative time
  * @TYPE_MARK:		packet mark (integer subtype)
@@ -166,6 +166,7 @@ struct datatype {
 	struct error_record		*(*parse)(struct parse_ctx *ctx,
 						  const struct expr *sym,
 						  struct expr **res);
+	struct error_record		*(*err)(const struct expr *sym);
 	void				(*describe)(struct output_ctx *octx);
 	const struct symbol_table	*sym_tbl;
 	unsigned int			refcnt;
@@ -173,12 +174,15 @@ struct datatype {
 
 extern const struct datatype *datatype_lookup(enum datatypes type);
 extern const struct datatype *datatype_lookup_byname(const char *name);
-extern struct datatype *datatype_get(const struct datatype *dtype);
+extern const struct datatype *datatype_get(const struct datatype *dtype);
 extern void datatype_set(struct expr *expr, const struct datatype *dtype);
+extern void __datatype_set(struct expr *expr, const struct datatype *dtype);
 extern void datatype_free(const struct datatype *dtype);
+struct datatype *datatype_clone(const struct datatype *orig_dtype);
 
 struct parse_ctx {
 	struct symbol_tables	*tbl;
+	const struct input_ctx	*input;
 };
 
 extern struct error_record *symbol_parse(struct parse_ctx *ctx,
@@ -254,6 +258,7 @@ extern const struct datatype verdict_type;
 extern const struct datatype nfproto_type;
 extern const struct datatype bitmask_type;
 extern const struct datatype integer_type;
+extern const struct datatype xinteger_type;
 extern const struct datatype string_type;
 extern const struct datatype lladdr_type;
 extern const struct datatype ipaddr_type;
@@ -296,7 +301,7 @@ concat_subtype_lookup(uint32_t type, unsigned int n)
 }
 
 extern const struct datatype *
-set_datatype_alloc(const struct datatype *orig_dtype, unsigned int byteorder);
+set_datatype_alloc(const struct datatype *orig_dtype, enum byteorder byteorder);
 
 extern void time_print(uint64_t msec, struct output_ctx *octx);
 extern struct error_record *time_parse(const struct location *loc,
@@ -308,6 +313,10 @@ extern struct error_record *rate_parse(const struct location *loc,
 
 extern struct error_record *data_unit_parse(const struct location *loc,
 					    const char *str, uint64_t *rate);
+
+struct limit_rate {
+	uint64_t rate, unit;
+};
 
 extern void expr_chain_export(const struct expr *e, char *chain);
 

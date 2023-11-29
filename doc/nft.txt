@@ -9,7 +9,7 @@ nft - Administration tool of the nftables framework for packet filtering and cla
 SYNOPSIS
 --------
 [verse]
-*nft* [ *-nNscaeSupyjt* ] [ *-I* 'directory' ] [ *-f* 'filename' | *-i* | 'cmd' ...]
+*nft* [ *-nNscaeSupyjtT* ] [ *-I* 'directory' ] [ *-f* 'filename' | *-i* | 'cmd' ...]
 *nft* *-h*
 *nft* *-v*
 
@@ -61,6 +61,11 @@ understanding of their meaning. You can get information about options by running
 *-c*::
 *--check*::
 	Check commands validity without actually applying the changes.
+
+*-o*::
+*--optimize*::
+	Optimize your ruleset. You can combine this option with '-c' to inspect
+        the proposed optimizations.
 
 .Ruleset list output formatting that modify the output of the list ruleset command:
 
@@ -165,17 +170,23 @@ SYMBOLIC VARIABLES
 ~~~~~~~~~~~~~~~~~~
 [verse]
 *define* 'variable' *=* 'expr'
+*undefine* 'variable'
+*redefine* 'variable' *=* 'expr'
 *$variable*
 
 Symbolic variables can be defined using the *define* statement. Variable
 references are expressions and can be used to initialize other variables. The scope
 of a definition is the current block and all blocks contained within.
+Symbolic variables can be undefined using the *undefine* statement, and modified
+using the *redefine* statement.
 
 .Using symbolic variables
 ---------------------------------------
 define int_if1 = eth0
 define int_if2 = eth1
 define int_ifs = { $int_if1, $int_if2 }
+redefine int_if2 = wlan0
+undefine int_if2
 
 filter input iif $int_ifs accept
 ---------------------------------------
@@ -193,7 +204,7 @@ packet processing paths, which invoke nftables if rules for these hooks exist.
 *inet*:: Internet (IPv4/IPv6) address family.
 *arp*:: ARP address family, handling IPv4 ARP packets.
 *bridge*:: Bridge address family, handling packets which traverse a bridge device.
-*netdev*:: Netdev address family, handling packets from ingress.
+*netdev*:: Netdev address family, handling packets on ingress and egress.
 
 All nftables objects exist in address family specific namespaces, therefore all
 identifiers include an address family. If an identifier is specified without an
@@ -251,9 +262,9 @@ The list of supported hooks is identical to IPv4/IPv6/Inet address families abov
 
 NETDEV ADDRESS FAMILY
 ~~~~~~~~~~~~~~~~~~~~
-The Netdev address family handles packets from the device ingress path. This
-family allows you to filter packets of any ethertype such as ARP, VLAN 802.1q,
-VLAN 802.1ad (Q-in-Q) as well as IPv4 and IPv6 packets.
+The Netdev address family handles packets from the device ingress and egress
+path. This family allows you to filter packets of any ethertype such as ARP,
+VLAN 802.1q, VLAN 802.1ad (Q-in-Q) as well as IPv4 and IPv6 packets.
 
 .Netdev address family hooks
 [options="header"]
@@ -263,7 +274,26 @@ VLAN 802.1ad (Q-in-Q) as well as IPv4 and IPv6 packets.
 All packets entering the system are processed by this hook. It is invoked after
 the network taps (ie. *tcpdump*), right after *tc* ingress and before layer 3
 protocol handlers, it can be used for early filtering and policing.
+|egress |
+All packets leaving the system are processed by this hook. It is invoked after
+layer 3 protocol handlers and before *tc* egress. It can be used for late
+filtering and policing.
 |=================
+
+Tunneled packets (such as *vxlan*) are processed by netdev family hooks both
+in decapsulated and encapsulated (tunneled) form. So a packet can be filtered
+on the overlay network as well as on the underlying network.
+
+Note that the order of netfilter and *tc* is mirrored on ingress versus egress.
+This ensures symmetry for NAT and other packet mangling.
+
+Ingress packets which are redirected out some other interface are only
+processed by netfilter on egress if they have passed through netfilter ingress
+processing before. Thus, ingress packets which are redirected by *tc* are not
+subjected to netfilter. But they are if they are redirected by *netfilter* on
+ingress. Conceptually, tc and netfilter can be thought of as layers, with
+netfilter layered above tc: If the packet hasn't been passed up from the
+tc layer to the netfilter layer, it's not subjected to netfilter on egress.
 
 RULESET
 -------
@@ -291,10 +321,11 @@ Effectively, this is the nft-equivalent of *iptables-save* and
 TABLES
 ------
 [verse]
-{*add* | *create*} *table* ['family'] 'table' [*{ flags* 'flags' *; }*]
-{*delete* | *list* | *flush*} *table* ['family'] 'table'
+{*add* | *create*} *table* ['family'] 'table' [ {*comment* 'comment' *;*'} *{ flags* 'flags' *; }*]
+{*delete* | *destroy* | *list* | *flush*} *table* ['family'] 'table'
 *list tables* ['family']
 *delete table* ['family'] *handle* 'handle'
+*destroy table* ['family'] *handle* 'handle'
 
 Tables are containers for chains, sets and stateful objects. They are identified
 by their address family and their name. The address family must be one of *ip*,
@@ -338,16 +369,18 @@ add table inet mytable
 [horizontal]
 *add*:: Add a new table for the given family with the given name.
 *delete*:: Delete the specified table.
+*destroy*:: Delete the specified table, it does not fail if it does not exist.
 *list*:: List all chains and rules of the specified table.
 *flush*:: Flush all chains and rules of the specified table.
 
 CHAINS
 ------
 [verse]
-{*add* | *create*} *chain* ['family'] 'table' 'chain' [*{ type* 'type' *hook* 'hook' [*device* 'device'] *priority* 'priority' *;* [*policy* 'policy' *;*] *}*]
-{*delete* | *list* | *flush*} *chain* ['family'] 'table' 'chain'
+{*add* | *create*} *chain* ['family'] 'table' 'chain' [*{ type* 'type' *hook* 'hook' [*device* 'device'] *priority* 'priority' *;* [*policy* 'policy' *;*] [*comment* 'comment' *;*'] *}*]
+{*delete* | *destroy* | *list* | *flush*} *chain* ['family'] 'table' 'chain'
 *list chains* ['family']
 *delete chain* ['family'] 'table' *handle* 'handle'
+*destroy chain* ['family'] 'table' *handle* 'handle'
 *rename chain* ['family'] 'table' 'chain' 'newname'
 
 Chains are containers for rules. They exist in two kinds, base chains and
@@ -360,6 +393,7 @@ organization.
 are specified, the chain is created as a base chain and hooked up to the networking stack.
 *create*:: Similar to the *add* command, but returns an error if the chain already exists.
 *delete*:: Delete the specified chain. The chain must not contain any rules or be used as jump target.
+*destroy*:: Delete the specified chain, it does not fail if it does not exist. The chain must not contain any rules or be used as jump target.
 *rename*:: Rename the specified chain.
 *list*:: List all rules of the specified chain.
 *flush*:: Flush all rules of the specified chain.
@@ -381,16 +415,17 @@ statements for instance).
 |route | ip, ip6 | output |
 If a packet has traversed a chain of this type and is about to be accepted, a
 new route lookup is performed if relevant parts of the IP header have changed.
-This allows to e.g. implement policy routing selectors in nftables.
+This allows one to e.g. implement policy routing selectors in nftables.
 |=================
 
 Apart from the special cases illustrated above (e.g. *nat* type not supporting
 *forward* hook or *route* type only supporting *output* hook), there are three
 further quirks worth noticing:
 
-* The netdev family supports merely a single combination, namely *filter* type and
-  *ingress* hook. Base chains in this family also require the *device* parameter
-  to be present since they exist per incoming interface only.
+* The netdev family supports merely two combinations, namely *filter* type with
+  *ingress* hook and *filter* type with *egress* hook. Base chains in this
+  family also require the *device* parameter to be present since they exist per
+  interface only.
 * The arp family supports only the *input* and *output* hooks, both in chains of type
   *filter*.
 * The inet family also supports the *ingress* hook (since Linux kernel 5.10),
@@ -399,10 +434,18 @@ further quirks worth noticing:
   *prerouting*, *input*, *forward*, *output*, *postrouting* and this *ingress*
   hook.
 
+The *device* parameter accepts a network interface name as a string, and is
+required when adding a base chain that filters traffic on the ingress or
+egress hooks. Any ingress or egress chains will only filter traffic from the
+interface specified in the *device* parameter.
+
 The *priority* parameter accepts a signed integer value or a standard priority
 name which specifies the order in which chains with the same *hook* value are
 traversed. The ordering is ascending, i.e. lower priority values have precedence
 over higher ones.
+
+With *nat* type chains, there's a lower excluding limit of -200 for *priority*
+values, because conntrack hooks at this priority and NAT requires it.
 
 Standard priority values can be replaced with easily memorizable names.  Not all
 names make sense in every family with every hook (see the compatibility matrices
@@ -441,7 +484,7 @@ with these standard names to ease relative prioritizing, e.g. *mangle - 5* stand
 for *-155*.  Values will also be printed like this until the value is not
 further than 10 from the standard value.
 
-Base chains also allow to set the chain's *policy*, i.e.  what happens to
+Base chains also allow one to set the chain's *policy*, i.e.  what happens to
 packets not explicitly accepted or refused in contained rules. Supported policy
 values are *accept* (which is the default) or *drop*.
 
@@ -450,7 +493,9 @@ RULES
 [verse]
 {*add* | *insert*} *rule* ['family'] 'table' 'chain' [*handle* 'handle' | *index* 'index'] 'statement' ... [*comment* 'comment']
 *replace rule* ['family'] 'table' 'chain' *handle* 'handle' 'statement' ... [*comment* 'comment']
-*delete rule* ['family'] 'table' 'chain' *handle* 'handle'
+{*delete* | *reset*} *rule* ['family'] 'table' 'chain' *handle* 'handle'
+*destroy rule* ['family'] 'table' 'chain' *handle* 'handle'
+*reset rules* ['family'] ['table' ['chain']]
 
 Rules are added to chains in the given table. If the family is not specified, the
 ip family is used. Rules are constructed from two kinds of components according
@@ -478,6 +523,8 @@ case the rule is inserted after the specified rule.
 beginning of the chain or before the specified rule.
 *replace*:: Similar to *add*, but the rule replaces the specified rule.
 *delete*:: Delete the specified rule.
+*destroy*:: Delete the specified rule, it does not fail if it does not exist.
+*reset*:: Reset rule-contained state, e.g. counter and quota statement values.
 
 .*add a rule to ip table output chain*
 -------------
@@ -527,11 +574,11 @@ The sets allowed_hosts and allowed_ports need to be created first. The next
 section describes nft set syntax in more detail.
 
 [verse]
-*add set* ['family'] 'table' 'set' *{ type* 'type' | *typeof* 'expression' *;* [*flags* 'flags' *;*] [*timeout* 'timeout' *;*] [*gc-interval* 'gc-interval' *;*] [*elements = {* 'element'[*,* ...] *} ;*] [*size* 'size' *;*] [*policy* 'policy' *;*] [*auto-merge ;*] *}*
-{*delete* | *list* | *flush*} *set* ['family'] 'table' 'set'
+*add set* ['family'] 'table' 'set' *{ type* 'type' | *typeof* 'expression' *;* [*flags* 'flags' *;*] [*timeout* 'timeout' *;*] [*gc-interval* 'gc-interval' *;*] [*elements = {* 'element'[*,* ...] *} ;*] [*size* 'size' *;*] [*comment* 'comment' *;*'] [*policy* 'policy' *;*] [*auto-merge ;*] *}*
+{*delete* | *destroy* | *list* | *flush* | *reset* } *set* ['family'] 'table' 'set'
 *list sets* ['family']
 *delete set* ['family'] 'table' *handle* 'handle'
-{*add* | *delete*} *element* ['family'] 'table' 'set' *{* 'element'[*,* ...] *}*
+{*add* | *delete* | *destroy* } *element* ['family'] 'table' 'set' *{* 'element'[*,* ...] *}*
 
 Sets are element containers of a user-defined data type, they are uniquely
 identified by a user-defined name and attached to tables. Their behaviour can
@@ -540,8 +587,10 @@ be tuned with the flags that can be specified at set creation time.
 [horizontal]
 *add*:: Add a new set in the specified table. See the Set specification table below for more information about how to specify properties of a set.
 *delete*:: Delete the specified set.
+*destroy*:: Delete the specified set, it does not fail if it does not exist.
 *list*:: Display the elements in the specified set.
 *flush*:: Remove all elements from the specified set.
+*reset*:: Reset state in all contained elements, e.g. counter and quota statement values.
 
 .Set specifications
 [options="header"]
@@ -554,8 +603,7 @@ string: ipv4_addr, ipv6_addr, ether_addr, inet_proto, inet_service, mark
 data type of set element |
 expression to derive the data type from
 |flags |
-set flags |
-string: constant, dynamic, interval, timeout
+set flags | string: constant, dynamic, interval, timeout.  Used to describe the sets properties.
 |timeout |
 time an element stays in the set, mandatory if set is added to from the packet path (ruleset)|
 string, decimal followed by unit. Units are: d, h, m, s
@@ -580,8 +628,8 @@ automatic merge of adjacent/overlapping set elements (only for interval sets) |
 MAPS
 -----
 [verse]
-*add map* ['family'] 'table' 'map' *{ type* 'type' | *typeof* 'expression' [*flags* 'flags' *;*] [*elements = {* 'element'[*,* ...] *} ;*] [*size* 'size' *;*] [*policy* 'policy' *;*] *}*
-{*delete* | *list* | *flush*} *map* ['family'] 'table' 'map'
+*add map* ['family'] 'table' 'map' *{ type* 'type' | *typeof* 'expression' [*flags* 'flags' *;*] [*elements = {* 'element'[*,* ...] *} ;*] [*size* 'size' *;*] [*comment* 'comment' *;*'] [*policy* 'policy' *;*] *}*
+{*delete* | *destroy* | *list* | *flush* | *reset* } *map* ['family'] 'table' 'map'
 *list maps* ['family']
 
 Maps store data based on some specific key used as input. They are uniquely identified by a user-defined name and attached to tables.
@@ -589,10 +637,10 @@ Maps store data based on some specific key used as input. They are uniquely iden
 [horizontal]
 *add*:: Add a new map in the specified table.
 *delete*:: Delete the specified map.
+*destroy*:: Delete the specified map, it does not fail if it does not exist.
 *list*:: Display the elements in the specified map.
 *flush*:: Remove all elements from the specified map.
-*add element*:: Comma-separated list of elements to add into the specified map.
-*delete element*:: Comma-separated list of element keys to delete from the specified map.
+*reset*:: Reset state in all contained elements, e.g. counter and quota statement values.
 
 .Map specifications
 [options="header"]
@@ -606,7 +654,7 @@ data type of set element |
 expression to derive the data type from
 |flags |
 map flags |
-string: constant, interval
+string, same as set flags
 |elements |
 elements contained by the map |
 map data type
@@ -618,18 +666,34 @@ map policy |
 string: performance [default], memory
 |=================
 
+Users can specifiy the properties/features that the set/map must support.
+This allows the kernel to pick an optimal internal representation.
+If a required flag is missing, the ruleset might still work, as
+nftables will auto-enable features if it can infer this from the ruleset.
+This may not work for all cases, however, so it is recommended to
+specify all required features in the set/map definition manually.
+
+.Set and Map flags
+[options="header"]
+|=================
+|Flag		| Description
+|constant	| Set contents will never change after creation
+|dynamic	| Set must support updates from the packet path with the *add*, *update* or *delete* keywords.
+|interval	| Set must be able to store intervals (ranges)
+|timeout	| Set must support element timeouts (auto-removal of elements once they expire).
+|=================
 
 ELEMENTS
 --------
 [verse]
 ____
-{*add* | *create* | *delete* | *get* } *element* ['family'] 'table' 'set' *{* 'ELEMENT'[*,* ...] *}*
+{*add* | *create* | *delete* | *destroy* | *get* | *reset* } *element* ['family'] 'table' 'set' *{* 'ELEMENT'[*,* ...] *}*
 
 'ELEMENT' := 'key_expression' 'OPTIONS' [*:* 'value_expression']
 'OPTIONS' := [*timeout* 'TIMESPEC'] [*expires* 'TIMESPEC'] [*comment* 'string']
 'TIMESPEC' := ['num'*d*]['num'*h*]['num'*m*]['num'[*s*]]
 ____
-Element-related commands allow to change contents of named sets and maps.
+Element-related commands allow one to change contents of named sets and maps.
 'key_expression' is typically a value matching the set type.
 'value_expression' is not allowed in sets but mandatory when adding to maps, where it
 matches the data part in its type definition. When deleting from maps, it may
@@ -642,6 +706,9 @@ listed elements may already exist.
 *get* command is useful to check if an element is contained in a set which may
 be non-trivial in very large and/or interval sets. In the latter case, the
 containing interval is returned instead of just the element itself.
+
+*reset* command resets state attached to the given element(s), e.g. counter and
+quota statement values.
 
 .Element options
 [options="header"]
@@ -661,7 +728,7 @@ FLOWTABLES
 [verse]
 {*add* | *create*} *flowtable* ['family'] 'table' 'flowtable' *{ hook* 'hook' *priority* 'priority' *; devices = {* 'device'[*,* ...] *} ; }*
 *list flowtables* ['family']
-{*delete* | *list*} *flowtable* ['family'] 'table' 'flowtable'
+{*delete* | *destroy* | *list*} *flowtable* ['family'] 'table' 'flowtable'
 *delete* *flowtable* ['family'] 'table' *handle* 'handle'
 
 Flowtables allow you to accelerate packet forwarding in software. Flowtables
@@ -685,6 +752,7 @@ and subtraction can be used to set relative priority, e.g. filter + 5 equals to
 [horizontal]
 *add*:: Add a new flowtable for the given family with the given name.
 *delete*:: Delete the specified flowtable.
+*destroy*:: Delete the specified flowtable, it does not fail if it does not exist.
 *list*:: List all flowtables.
 
 LISTING
@@ -701,11 +769,22 @@ kernel modules, such as nf_conntrack.
 STATEFUL OBJECTS
 ----------------
 [verse]
-{*add* | *delete* | *list* | *reset*} 'type' ['family'] 'table' 'object'
-*delete* 'type' ['family'] 'table' *handle* 'handle'
+{*add* | *delete* | *destroy* | *list* | *reset*} *counter* ['family'] 'table' 'object'
+{*add* | *delete* | *destroy* | *list* | *reset*} *quota* ['family'] 'table' 'object'
+{*add* | *delete* | *destroy* | *list*} *limit* ['family'] 'table' 'object'
+*delete* 'counter' ['family'] 'table' *handle* 'handle'
+*delete* 'quota' ['family'] 'table' *handle* 'handle'
+*delete* 'limit' ['family'] 'table' *handle* 'handle'
+*destroy* 'counter' ['family'] 'table' *handle* 'handle'
+*destroy* 'quota' ['family'] 'table' *handle* 'handle'
+*destroy* 'limit' ['family'] 'table' *handle* 'handle'
 *list counters* ['family']
 *list quotas* ['family']
 *list limits* ['family']
+*reset counters* ['family']
+*reset quotas* ['family']
+*reset counters* ['family'] 'table'
+*reset quotas* ['family'] 'table'
 
 Stateful objects are attached to tables and are identified by a unique name.
 They group stateful information from rules, to reference them in rules the
@@ -714,6 +793,7 @@ keywords "type name" are used e.g. "counter name".
 [horizontal]
 *add*:: Add a new stateful object in the specified table.
 *delete*:: Delete the specified object.
+*destroy*:: Delete the specified object, it does not fail if it does not exist.
 *list*:: Display stateful information the object holds.
 *reset*:: List-and-reset stateful object.
 

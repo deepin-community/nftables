@@ -1,8 +1,8 @@
-/* A Bison parser, made by GNU Bison 3.3.2.  */
+/* A Bison parser, made by GNU Bison 3.7.5.  */
 
 /* Bison interface for Yacc-like parsers in C
 
-   Copyright (C) 1984, 1989-1990, 2000-2015, 2018-2019 Free Software Foundation,
+   Copyright (C) 1984, 1989-1990, 2000-2015, 2018-2021 Free Software Foundation,
    Inc.
 
    This program is free software: you can redistribute it and/or modify
@@ -31,8 +31,9 @@
    This special exception was added by the Free Software Foundation in
    version 2.2 of Bison.  */
 
-/* Undocumented macros, especially those whose name start with YY_,
-   are private implementation details.  Do not rely on them.  */
+/* DO NOT RELY ON FEATURES THAT ARE NOT DOCUMENTED in the manual,
+   especially those whose name start with YY_ or yy_.  They are
+   private implementation details that can be changed or removed.  */
 
 #ifndef YY_NFT_PARSER_BISON_H_INCLUDED
 # define YY_NFT_PARSER_BISON_H_INCLUDED
@@ -44,363 +45,383 @@
 extern int nft_debug;
 #endif
 
-/* Token type.  */
+/* Token kinds.  */
 #ifndef YYTOKENTYPE
 # define YYTOKENTYPE
   enum yytokentype
   {
-    TOKEN_EOF = 0,
-    JUNK = 258,
-    NEWLINE = 259,
-    COLON = 260,
-    SEMICOLON = 261,
-    COMMA = 262,
-    DOT = 263,
-    EQ = 264,
-    NEQ = 265,
-    LT = 266,
-    GT = 267,
-    GTE = 268,
-    LTE = 269,
-    LSHIFT = 270,
-    RSHIFT = 271,
-    AMPERSAND = 272,
-    CARET = 273,
-    NOT = 274,
-    SLASH = 275,
-    ASTERISK = 276,
-    DASH = 277,
-    AT = 278,
-    VMAP = 279,
-    PLUS = 280,
-    INCLUDE = 281,
-    DEFINE = 282,
-    REDEFINE = 283,
-    UNDEFINE = 284,
-    FIB = 285,
-    SOCKET = 286,
-    TRANSPARENT = 287,
-    WILDCARD = 288,
-    CGROUPV2 = 289,
-    TPROXY = 290,
-    OSF = 291,
-    SYNPROXY = 292,
-    MSS = 293,
-    WSCALE = 294,
-    TYPEOF = 295,
-    HOOK = 296,
-    HOOKS = 297,
-    DEVICE = 298,
-    DEVICES = 299,
-    TABLE = 300,
-    TABLES = 301,
-    CHAIN = 302,
-    CHAINS = 303,
-    RULE = 304,
-    RULES = 305,
-    SETS = 306,
-    SET = 307,
-    ELEMENT = 308,
-    MAP = 309,
-    MAPS = 310,
-    FLOWTABLE = 311,
-    HANDLE = 312,
-    RULESET = 313,
-    TRACE = 314,
-    INET = 315,
-    NETDEV = 316,
-    ADD = 317,
-    UPDATE = 318,
-    REPLACE = 319,
-    CREATE = 320,
-    INSERT = 321,
-    DELETE = 322,
-    GET = 323,
-    LIST = 324,
-    RESET = 325,
-    FLUSH = 326,
-    RENAME = 327,
-    DESCRIBE = 328,
-    IMPORT = 329,
-    EXPORT = 330,
-    MONITOR = 331,
-    ALL = 332,
-    ACCEPT = 333,
-    DROP = 334,
-    CONTINUE = 335,
-    JUMP = 336,
-    GOTO = 337,
-    RETURN = 338,
-    TO = 339,
-    CONSTANT = 340,
-    INTERVAL = 341,
-    DYNAMIC = 342,
-    AUTOMERGE = 343,
-    TIMEOUT = 344,
-    GC_INTERVAL = 345,
-    ELEMENTS = 346,
-    EXPIRES = 347,
-    POLICY = 348,
-    MEMORY = 349,
-    PERFORMANCE = 350,
-    SIZE = 351,
-    FLOW = 352,
-    OFFLOAD = 353,
-    METER = 354,
-    METERS = 355,
-    FLOWTABLES = 356,
-    NUM = 357,
-    STRING = 358,
-    QUOTED_STRING = 359,
-    ASTERISK_STRING = 360,
-    LL_HDR = 361,
-    NETWORK_HDR = 362,
-    TRANSPORT_HDR = 363,
-    BRIDGE = 364,
-    ETHER = 365,
-    SADDR = 366,
-    DADDR = 367,
-    TYPE = 368,
-    VLAN = 369,
-    ID = 370,
-    CFI = 371,
-    DEI = 372,
-    PCP = 373,
-    ARP = 374,
-    HTYPE = 375,
-    PTYPE = 376,
-    HLEN = 377,
-    PLEN = 378,
-    OPERATION = 379,
-    IP = 380,
-    HDRVERSION = 381,
-    HDRLENGTH = 382,
-    DSCP = 383,
-    ECN = 384,
-    LENGTH = 385,
-    FRAG_OFF = 386,
-    TTL = 387,
-    PROTOCOL = 388,
-    CHECKSUM = 389,
-    PTR = 390,
-    VALUE = 391,
-    LSRR = 392,
-    RR = 393,
-    SSRR = 394,
-    RA = 395,
-    ICMP = 396,
-    CODE = 397,
-    SEQUENCE = 398,
-    GATEWAY = 399,
-    MTU = 400,
-    IGMP = 401,
-    MRT = 402,
-    OPTIONS = 403,
-    IP6 = 404,
-    PRIORITY = 405,
-    FLOWLABEL = 406,
-    NEXTHDR = 407,
-    HOPLIMIT = 408,
-    ICMP6 = 409,
-    PPTR = 410,
-    MAXDELAY = 411,
-    AH = 412,
-    RESERVED = 413,
-    SPI = 414,
-    ESP = 415,
-    COMP = 416,
-    FLAGS = 417,
-    CPI = 418,
-    PORT = 419,
-    UDP = 420,
-    SPORT = 421,
-    DPORT = 422,
-    UDPLITE = 423,
-    CSUMCOV = 424,
-    TCP = 425,
-    ACKSEQ = 426,
-    DOFF = 427,
-    WINDOW = 428,
-    URGPTR = 429,
-    OPTION = 430,
-    ECHO = 431,
-    EOL = 432,
-    NOP = 433,
-    SACK = 434,
-    SACK0 = 435,
-    SACK1 = 436,
-    SACK2 = 437,
-    SACK3 = 438,
-    SACK_PERM = 439,
-    TIMESTAMP = 440,
-    KIND = 441,
-    COUNT = 442,
-    LEFT = 443,
-    RIGHT = 444,
-    TSVAL = 445,
-    TSECR = 446,
-    DCCP = 447,
-    SCTP = 448,
-    CHUNK = 449,
-    DATA = 450,
-    INIT = 451,
-    INIT_ACK = 452,
-    HEARTBEAT = 453,
-    HEARTBEAT_ACK = 454,
-    ABORT = 455,
-    SHUTDOWN = 456,
-    SHUTDOWN_ACK = 457,
-    ERROR = 458,
-    COOKIE_ECHO = 459,
-    COOKIE_ACK = 460,
-    ECNE = 461,
-    CWR = 462,
-    SHUTDOWN_COMPLETE = 463,
-    ASCONF_ACK = 464,
-    FORWARD_TSN = 465,
-    ASCONF = 466,
-    TSN = 467,
-    STREAM = 468,
-    SSN = 469,
-    PPID = 470,
-    INIT_TAG = 471,
-    A_RWND = 472,
-    NUM_OSTREAMS = 473,
-    NUM_ISTREAMS = 474,
-    INIT_TSN = 475,
-    CUM_TSN_ACK = 476,
-    NUM_GACK_BLOCKS = 477,
-    NUM_DUP_TSNS = 478,
-    LOWEST_TSN = 479,
-    SEQNO = 480,
-    NEW_CUM_TSN = 481,
-    VTAG = 482,
-    RT = 483,
-    RT0 = 484,
-    RT2 = 485,
-    RT4 = 486,
-    SEG_LEFT = 487,
-    ADDR = 488,
-    LAST_ENT = 489,
-    TAG = 490,
-    SID = 491,
-    HBH = 492,
-    FRAG = 493,
-    RESERVED2 = 494,
-    MORE_FRAGMENTS = 495,
-    DST = 496,
-    MH = 497,
-    META = 498,
-    MARK = 499,
-    IIF = 500,
-    IIFNAME = 501,
-    IIFTYPE = 502,
-    OIF = 503,
-    OIFNAME = 504,
-    OIFTYPE = 505,
-    SKUID = 506,
-    SKGID = 507,
-    NFTRACE = 508,
-    RTCLASSID = 509,
-    IBRIPORT = 510,
-    OBRIPORT = 511,
-    IBRIDGENAME = 512,
-    OBRIDGENAME = 513,
-    PKTTYPE = 514,
-    CPU = 515,
-    IIFGROUP = 516,
-    OIFGROUP = 517,
-    CGROUP = 518,
-    TIME = 519,
-    CLASSID = 520,
-    NEXTHOP = 521,
-    CT = 522,
-    L3PROTOCOL = 523,
-    PROTO_SRC = 524,
-    PROTO_DST = 525,
-    ZONE = 526,
-    DIRECTION = 527,
-    EVENT = 528,
-    EXPECTATION = 529,
-    EXPIRATION = 530,
-    HELPER = 531,
-    LABEL = 532,
-    STATE = 533,
-    STATUS = 534,
-    ORIGINAL = 535,
-    REPLY = 536,
-    COUNTER = 537,
-    NAME = 538,
-    PACKETS = 539,
-    BYTES = 540,
-    AVGPKT = 541,
-    COUNTERS = 542,
-    QUOTAS = 543,
-    LIMITS = 544,
-    SYNPROXYS = 545,
-    HELPERS = 546,
-    LOG = 547,
-    PREFIX = 548,
-    GROUP = 549,
-    SNAPLEN = 550,
-    QUEUE_THRESHOLD = 551,
-    LEVEL = 552,
-    LIMIT = 553,
-    RATE = 554,
-    BURST = 555,
-    OVER = 556,
-    UNTIL = 557,
-    QUOTA = 558,
-    USED = 559,
-    SECMARK = 560,
-    SECMARKS = 561,
-    SECOND = 562,
-    MINUTE = 563,
-    HOUR = 564,
-    DAY = 565,
-    WEEK = 566,
-    _REJECT = 567,
-    WITH = 568,
-    ICMPX = 569,
-    SNAT = 570,
-    DNAT = 571,
-    MASQUERADE = 572,
-    REDIRECT = 573,
-    RANDOM = 574,
-    FULLY_RANDOM = 575,
-    PERSISTENT = 576,
-    QUEUE = 577,
-    QUEUENUM = 578,
-    BYPASS = 579,
-    FANOUT = 580,
-    DUP = 581,
-    FWD = 582,
-    NUMGEN = 583,
-    INC = 584,
-    MOD = 585,
-    OFFSET = 586,
-    JHASH = 587,
-    SYMHASH = 588,
-    SEED = 589,
-    POSITION = 590,
-    INDEX = 591,
-    COMMENT = 592,
-    XML = 593,
-    JSON = 594,
-    VM = 595,
-    NOTRACK = 596,
-    EXISTS = 597,
-    MISSING = 598,
-    EXTHDR = 599,
-    IPSEC = 600,
-    REQID = 601,
-    SPNUM = 602,
-    IN = 603,
-    OUT = 604
+    YYEMPTY = -2,
+    TOKEN_EOF = 0,                 /* "end of file"  */
+    YYerror = 256,                 /* error  */
+    YYUNDEF = 257,                 /* "invalid token"  */
+    JUNK = 258,                    /* "junk"  */
+    NEWLINE = 259,                 /* "newline"  */
+    COLON = 260,                   /* "colon"  */
+    SEMICOLON = 261,               /* "semicolon"  */
+    COMMA = 262,                   /* "comma"  */
+    DOT = 263,                     /* "."  */
+    EQ = 264,                      /* "=="  */
+    NEQ = 265,                     /* "!="  */
+    LT = 266,                      /* "<"  */
+    GT = 267,                      /* ">"  */
+    GTE = 268,                     /* ">="  */
+    LTE = 269,                     /* "<="  */
+    LSHIFT = 270,                  /* "<<"  */
+    RSHIFT = 271,                  /* ">>"  */
+    AMPERSAND = 272,               /* "&"  */
+    CARET = 273,                   /* "^"  */
+    NOT = 274,                     /* "!"  */
+    SLASH = 275,                   /* "/"  */
+    ASTERISK = 276,                /* "*"  */
+    DASH = 277,                    /* "-"  */
+    AT = 278,                      /* "@"  */
+    VMAP = 279,                    /* "vmap"  */
+    PLUS = 280,                    /* "+"  */
+    INCLUDE = 281,                 /* "include"  */
+    DEFINE = 282,                  /* "define"  */
+    REDEFINE = 283,                /* "redefine"  */
+    UNDEFINE = 284,                /* "undefine"  */
+    FIB = 285,                     /* "fib"  */
+    SOCKET = 286,                  /* "socket"  */
+    TRANSPARENT = 287,             /* "transparent"  */
+    WILDCARD = 288,                /* "wildcard"  */
+    CGROUPV2 = 289,                /* "cgroupv2"  */
+    TPROXY = 290,                  /* "tproxy"  */
+    OSF = 291,                     /* "osf"  */
+    SYNPROXY = 292,                /* "synproxy"  */
+    MSS = 293,                     /* "mss"  */
+    WSCALE = 294,                  /* "wscale"  */
+    TYPEOF = 295,                  /* "typeof"  */
+    HOOK = 296,                    /* "hook"  */
+    HOOKS = 297,                   /* "hooks"  */
+    DEVICE = 298,                  /* "device"  */
+    DEVICES = 299,                 /* "devices"  */
+    TABLE = 300,                   /* "table"  */
+    TABLES = 301,                  /* "tables"  */
+    CHAIN = 302,                   /* "chain"  */
+    CHAINS = 303,                  /* "chains"  */
+    RULE = 304,                    /* "rule"  */
+    RULES = 305,                   /* "rules"  */
+    SETS = 306,                    /* "sets"  */
+    SET = 307,                     /* "set"  */
+    ELEMENT = 308,                 /* "element"  */
+    MAP = 309,                     /* "map"  */
+    MAPS = 310,                    /* "maps"  */
+    FLOWTABLE = 311,               /* "flowtable"  */
+    HANDLE = 312,                  /* "handle"  */
+    RULESET = 313,                 /* "ruleset"  */
+    TRACE = 314,                   /* "trace"  */
+    INET = 315,                    /* "inet"  */
+    NETDEV = 316,                  /* "netdev"  */
+    ADD = 317,                     /* "add"  */
+    UPDATE = 318,                  /* "update"  */
+    REPLACE = 319,                 /* "replace"  */
+    CREATE = 320,                  /* "create"  */
+    INSERT = 321,                  /* "insert"  */
+    DELETE = 322,                  /* "delete"  */
+    GET = 323,                     /* "get"  */
+    LIST = 324,                    /* "list"  */
+    RESET = 325,                   /* "reset"  */
+    FLUSH = 326,                   /* "flush"  */
+    RENAME = 327,                  /* "rename"  */
+    DESCRIBE = 328,                /* "describe"  */
+    IMPORT = 329,                  /* "import"  */
+    EXPORT = 330,                  /* "export"  */
+    DESTROY = 331,                 /* "destroy"  */
+    MONITOR = 332,                 /* "monitor"  */
+    ALL = 333,                     /* "all"  */
+    ACCEPT = 334,                  /* "accept"  */
+    DROP = 335,                    /* "drop"  */
+    CONTINUE = 336,                /* "continue"  */
+    JUMP = 337,                    /* "jump"  */
+    GOTO = 338,                    /* "goto"  */
+    RETURN = 339,                  /* "return"  */
+    TO = 340,                      /* "to"  */
+    CONSTANT = 341,                /* "constant"  */
+    INTERVAL = 342,                /* "interval"  */
+    DYNAMIC = 343,                 /* "dynamic"  */
+    AUTOMERGE = 344,               /* "auto-merge"  */
+    TIMEOUT = 345,                 /* "timeout"  */
+    GC_INTERVAL = 346,             /* "gc-interval"  */
+    ELEMENTS = 347,                /* "elements"  */
+    EXPIRES = 348,                 /* "expires"  */
+    POLICY = 349,                  /* "policy"  */
+    MEMORY = 350,                  /* "memory"  */
+    PERFORMANCE = 351,             /* "performance"  */
+    SIZE = 352,                    /* "size"  */
+    FLOW = 353,                    /* "flow"  */
+    OFFLOAD = 354,                 /* "offload"  */
+    METER = 355,                   /* "meter"  */
+    METERS = 356,                  /* "meters"  */
+    FLOWTABLES = 357,              /* "flowtables"  */
+    NUM = 358,                     /* "number"  */
+    STRING = 359,                  /* "string"  */
+    QUOTED_STRING = 360,           /* "quoted string"  */
+    ASTERISK_STRING = 361,         /* "string with a trailing asterisk"  */
+    LL_HDR = 362,                  /* "ll"  */
+    NETWORK_HDR = 363,             /* "nh"  */
+    TRANSPORT_HDR = 364,           /* "th"  */
+    BRIDGE = 365,                  /* "bridge"  */
+    ETHER = 366,                   /* "ether"  */
+    SADDR = 367,                   /* "saddr"  */
+    DADDR = 368,                   /* "daddr"  */
+    TYPE = 369,                    /* "type"  */
+    VLAN = 370,                    /* "vlan"  */
+    ID = 371,                      /* "id"  */
+    CFI = 372,                     /* "cfi"  */
+    DEI = 373,                     /* "dei"  */
+    PCP = 374,                     /* "pcp"  */
+    ARP = 375,                     /* "arp"  */
+    HTYPE = 376,                   /* "htype"  */
+    PTYPE = 377,                   /* "ptype"  */
+    HLEN = 378,                    /* "hlen"  */
+    PLEN = 379,                    /* "plen"  */
+    OPERATION = 380,               /* "operation"  */
+    IP = 381,                      /* "ip"  */
+    HDRVERSION = 382,              /* "version"  */
+    HDRLENGTH = 383,               /* "hdrlength"  */
+    DSCP = 384,                    /* "dscp"  */
+    ECN = 385,                     /* "ecn"  */
+    LENGTH = 386,                  /* "length"  */
+    FRAG_OFF = 387,                /* "frag-off"  */
+    TTL = 388,                     /* "ttl"  */
+    PROTOCOL = 389,                /* "protocol"  */
+    CHECKSUM = 390,                /* "checksum"  */
+    PTR = 391,                     /* "ptr"  */
+    VALUE = 392,                   /* "value"  */
+    LSRR = 393,                    /* "lsrr"  */
+    RR = 394,                      /* "rr"  */
+    SSRR = 395,                    /* "ssrr"  */
+    RA = 396,                      /* "ra"  */
+    ICMP = 397,                    /* "icmp"  */
+    CODE = 398,                    /* "code"  */
+    SEQUENCE = 399,                /* "seq"  */
+    GATEWAY = 400,                 /* "gateway"  */
+    MTU = 401,                     /* "mtu"  */
+    IGMP = 402,                    /* "igmp"  */
+    MRT = 403,                     /* "mrt"  */
+    OPTIONS = 404,                 /* "options"  */
+    IP6 = 405,                     /* "ip6"  */
+    PRIORITY = 406,                /* "priority"  */
+    FLOWLABEL = 407,               /* "flowlabel"  */
+    NEXTHDR = 408,                 /* "nexthdr"  */
+    HOPLIMIT = 409,                /* "hoplimit"  */
+    ICMP6 = 410,                   /* "icmpv6"  */
+    PPTR = 411,                    /* "param-problem"  */
+    MAXDELAY = 412,                /* "max-delay"  */
+    TADDR = 413,                   /* "taddr"  */
+    AH = 414,                      /* "ah"  */
+    RESERVED = 415,                /* "reserved"  */
+    SPI = 416,                     /* "spi"  */
+    ESP = 417,                     /* "esp"  */
+    COMP = 418,                    /* "comp"  */
+    FLAGS = 419,                   /* "flags"  */
+    CPI = 420,                     /* "cpi"  */
+    PORT = 421,                    /* "port"  */
+    UDP = 422,                     /* "udp"  */
+    SPORT = 423,                   /* "sport"  */
+    DPORT = 424,                   /* "dport"  */
+    UDPLITE = 425,                 /* "udplite"  */
+    CSUMCOV = 426,                 /* "csumcov"  */
+    TCP = 427,                     /* "tcp"  */
+    ACKSEQ = 428,                  /* "ackseq"  */
+    DOFF = 429,                    /* "doff"  */
+    WINDOW = 430,                  /* "window"  */
+    URGPTR = 431,                  /* "urgptr"  */
+    OPTION = 432,                  /* "option"  */
+    ECHO = 433,                    /* "echo"  */
+    EOL = 434,                     /* "eol"  */
+    MPTCP = 435,                   /* "mptcp"  */
+    NOP = 436,                     /* "nop"  */
+    SACK = 437,                    /* "sack"  */
+    SACK0 = 438,                   /* "sack0"  */
+    SACK1 = 439,                   /* "sack1"  */
+    SACK2 = 440,                   /* "sack2"  */
+    SACK3 = 441,                   /* "sack3"  */
+    SACK_PERM = 442,               /* "sack-permitted"  */
+    FASTOPEN = 443,                /* "fastopen"  */
+    MD5SIG = 444,                  /* "md5sig"  */
+    TIMESTAMP = 445,               /* "timestamp"  */
+    COUNT = 446,                   /* "count"  */
+    LEFT = 447,                    /* "left"  */
+    RIGHT = 448,                   /* "right"  */
+    TSVAL = 449,                   /* "tsval"  */
+    TSECR = 450,                   /* "tsecr"  */
+    SUBTYPE = 451,                 /* "subtype"  */
+    DCCP = 452,                    /* "dccp"  */
+    VXLAN = 453,                   /* "vxlan"  */
+    VNI = 454,                     /* "vni"  */
+    GRE = 455,                     /* "gre"  */
+    GRETAP = 456,                  /* "gretap"  */
+    GENEVE = 457,                  /* "geneve"  */
+    SCTP = 458,                    /* "sctp"  */
+    CHUNK = 459,                   /* "chunk"  */
+    DATA = 460,                    /* "data"  */
+    INIT = 461,                    /* "init"  */
+    INIT_ACK = 462,                /* "init-ack"  */
+    HEARTBEAT = 463,               /* "heartbeat"  */
+    HEARTBEAT_ACK = 464,           /* "heartbeat-ack"  */
+    ABORT = 465,                   /* "abort"  */
+    SHUTDOWN = 466,                /* "shutdown"  */
+    SHUTDOWN_ACK = 467,            /* "shutdown-ack"  */
+    ERROR = 468,                   /* "error"  */
+    COOKIE_ECHO = 469,             /* "cookie-echo"  */
+    COOKIE_ACK = 470,              /* "cookie-ack"  */
+    ECNE = 471,                    /* "ecne"  */
+    CWR = 472,                     /* "cwr"  */
+    SHUTDOWN_COMPLETE = 473,       /* "shutdown-complete"  */
+    ASCONF_ACK = 474,              /* "asconf-ack"  */
+    FORWARD_TSN = 475,             /* "forward-tsn"  */
+    ASCONF = 476,                  /* "asconf"  */
+    TSN = 477,                     /* "tsn"  */
+    STREAM = 478,                  /* "stream"  */
+    SSN = 479,                     /* "ssn"  */
+    PPID = 480,                    /* "ppid"  */
+    INIT_TAG = 481,                /* "init-tag"  */
+    A_RWND = 482,                  /* "a-rwnd"  */
+    NUM_OSTREAMS = 483,            /* "num-outbound-streams"  */
+    NUM_ISTREAMS = 484,            /* "num-inbound-streams"  */
+    INIT_TSN = 485,                /* "initial-tsn"  */
+    CUM_TSN_ACK = 486,             /* "cum-tsn-ack"  */
+    NUM_GACK_BLOCKS = 487,         /* "num-gap-ack-blocks"  */
+    NUM_DUP_TSNS = 488,            /* "num-dup-tsns"  */
+    LOWEST_TSN = 489,              /* "lowest-tsn"  */
+    SEQNO = 490,                   /* "seqno"  */
+    NEW_CUM_TSN = 491,             /* "new-cum-tsn"  */
+    VTAG = 492,                    /* "vtag"  */
+    RT = 493,                      /* "rt"  */
+    RT0 = 494,                     /* "rt0"  */
+    RT2 = 495,                     /* "rt2"  */
+    RT4 = 496,                     /* "srh"  */
+    SEG_LEFT = 497,                /* "seg-left"  */
+    ADDR = 498,                    /* "addr"  */
+    LAST_ENT = 499,                /* "last-entry"  */
+    TAG = 500,                     /* "tag"  */
+    SID = 501,                     /* "sid"  */
+    HBH = 502,                     /* "hbh"  */
+    FRAG = 503,                    /* "frag"  */
+    RESERVED2 = 504,               /* "reserved2"  */
+    MORE_FRAGMENTS = 505,          /* "more-fragments"  */
+    DST = 506,                     /* "dst"  */
+    MH = 507,                      /* "mh"  */
+    META = 508,                    /* "meta"  */
+    MARK = 509,                    /* "mark"  */
+    IIF = 510,                     /* "iif"  */
+    IIFNAME = 511,                 /* "iifname"  */
+    IIFTYPE = 512,                 /* "iiftype"  */
+    OIF = 513,                     /* "oif"  */
+    OIFNAME = 514,                 /* "oifname"  */
+    OIFTYPE = 515,                 /* "oiftype"  */
+    SKUID = 516,                   /* "skuid"  */
+    SKGID = 517,                   /* "skgid"  */
+    NFTRACE = 518,                 /* "nftrace"  */
+    RTCLASSID = 519,               /* "rtclassid"  */
+    IBRIPORT = 520,                /* "ibriport"  */
+    OBRIPORT = 521,                /* "obriport"  */
+    IBRIDGENAME = 522,             /* "ibrname"  */
+    OBRIDGENAME = 523,             /* "obrname"  */
+    PKTTYPE = 524,                 /* "pkttype"  */
+    CPU = 525,                     /* "cpu"  */
+    IIFGROUP = 526,                /* "iifgroup"  */
+    OIFGROUP = 527,                /* "oifgroup"  */
+    CGROUP = 528,                  /* "cgroup"  */
+    TIME = 529,                    /* "time"  */
+    CLASSID = 530,                 /* "classid"  */
+    NEXTHOP = 531,                 /* "nexthop"  */
+    CT = 532,                      /* "ct"  */
+    L3PROTOCOL = 533,              /* "l3proto"  */
+    PROTO_SRC = 534,               /* "proto-src"  */
+    PROTO_DST = 535,               /* "proto-dst"  */
+    ZONE = 536,                    /* "zone"  */
+    DIRECTION = 537,               /* "direction"  */
+    EVENT = 538,                   /* "event"  */
+    EXPECTATION = 539,             /* "expectation"  */
+    EXPIRATION = 540,              /* "expiration"  */
+    HELPER = 541,                  /* "helper"  */
+    LABEL = 542,                   /* "label"  */
+    STATE = 543,                   /* "state"  */
+    STATUS = 544,                  /* "status"  */
+    ORIGINAL = 545,                /* "original"  */
+    REPLY = 546,                   /* "reply"  */
+    COUNTER = 547,                 /* "counter"  */
+    NAME = 548,                    /* "name"  */
+    PACKETS = 549,                 /* "packets"  */
+    BYTES = 550,                   /* "bytes"  */
+    AVGPKT = 551,                  /* "avgpkt"  */
+    LAST = 552,                    /* "last"  */
+    NEVER = 553,                   /* "never"  */
+    COUNTERS = 554,                /* "counters"  */
+    QUOTAS = 555,                  /* "quotas"  */
+    LIMITS = 556,                  /* "limits"  */
+    SYNPROXYS = 557,               /* "synproxys"  */
+    HELPERS = 558,                 /* "helpers"  */
+    LOG = 559,                     /* "log"  */
+    PREFIX = 560,                  /* "prefix"  */
+    GROUP = 561,                   /* "group"  */
+    SNAPLEN = 562,                 /* "snaplen"  */
+    QUEUE_THRESHOLD = 563,         /* "queue-threshold"  */
+    LEVEL = 564,                   /* "level"  */
+    LIMIT = 565,                   /* "limit"  */
+    RATE = 566,                    /* "rate"  */
+    BURST = 567,                   /* "burst"  */
+    OVER = 568,                    /* "over"  */
+    UNTIL = 569,                   /* "until"  */
+    QUOTA = 570,                   /* "quota"  */
+    USED = 571,                    /* "used"  */
+    SECMARK = 572,                 /* "secmark"  */
+    SECMARKS = 573,                /* "secmarks"  */
+    SECOND = 574,                  /* "second"  */
+    MINUTE = 575,                  /* "minute"  */
+    HOUR = 576,                    /* "hour"  */
+    DAY = 577,                     /* "day"  */
+    WEEK = 578,                    /* "week"  */
+    _REJECT = 579,                 /* "reject"  */
+    WITH = 580,                    /* "with"  */
+    ICMPX = 581,                   /* "icmpx"  */
+    SNAT = 582,                    /* "snat"  */
+    DNAT = 583,                    /* "dnat"  */
+    MASQUERADE = 584,              /* "masquerade"  */
+    REDIRECT = 585,                /* "redirect"  */
+    RANDOM = 586,                  /* "random"  */
+    FULLY_RANDOM = 587,            /* "fully-random"  */
+    PERSISTENT = 588,              /* "persistent"  */
+    QUEUE = 589,                   /* "queue"  */
+    QUEUENUM = 590,                /* "num"  */
+    BYPASS = 591,                  /* "bypass"  */
+    FANOUT = 592,                  /* "fanout"  */
+    DUP = 593,                     /* "dup"  */
+    FWD = 594,                     /* "fwd"  */
+    NUMGEN = 595,                  /* "numgen"  */
+    INC = 596,                     /* "inc"  */
+    MOD = 597,                     /* "mod"  */
+    OFFSET = 598,                  /* "offset"  */
+    JHASH = 599,                   /* "jhash"  */
+    SYMHASH = 600,                 /* "symhash"  */
+    SEED = 601,                    /* "seed"  */
+    POSITION = 602,                /* "position"  */
+    INDEX = 603,                   /* "index"  */
+    COMMENT = 604,                 /* "comment"  */
+    XML = 605,                     /* "xml"  */
+    JSON = 606,                    /* "json"  */
+    VM = 607,                      /* "vm"  */
+    NOTRACK = 608,                 /* "notrack"  */
+    EXISTS = 609,                  /* "exists"  */
+    MISSING = 610,                 /* "missing"  */
+    EXTHDR = 611,                  /* "exthdr"  */
+    IPSEC = 612,                   /* "ipsec"  */
+    REQID = 613,                   /* "reqid"  */
+    SPNUM = 614,                   /* "spnum"  */
+    IN = 615,                      /* "in"  */
+    OUT = 616,                     /* "out"  */
+    XT = 617                       /* "xt"  */
   };
+  typedef enum yytokentype yytoken_kind_t;
 #endif
-/* Tokens.  */
+/* Token kinds.  */
+#define YYEMPTY -2
 #define TOKEN_EOF 0
+#define YYerror 256
+#define YYUNDEF 257
 #define JUNK 258
 #define NEWLINE 259
 #define COLON 260
@@ -474,287 +495,299 @@ extern int nft_debug;
 #define DESCRIBE 328
 #define IMPORT 329
 #define EXPORT 330
-#define MONITOR 331
-#define ALL 332
-#define ACCEPT 333
-#define DROP 334
-#define CONTINUE 335
-#define JUMP 336
-#define GOTO 337
-#define RETURN 338
-#define TO 339
-#define CONSTANT 340
-#define INTERVAL 341
-#define DYNAMIC 342
-#define AUTOMERGE 343
-#define TIMEOUT 344
-#define GC_INTERVAL 345
-#define ELEMENTS 346
-#define EXPIRES 347
-#define POLICY 348
-#define MEMORY 349
-#define PERFORMANCE 350
-#define SIZE 351
-#define FLOW 352
-#define OFFLOAD 353
-#define METER 354
-#define METERS 355
-#define FLOWTABLES 356
-#define NUM 357
-#define STRING 358
-#define QUOTED_STRING 359
-#define ASTERISK_STRING 360
-#define LL_HDR 361
-#define NETWORK_HDR 362
-#define TRANSPORT_HDR 363
-#define BRIDGE 364
-#define ETHER 365
-#define SADDR 366
-#define DADDR 367
-#define TYPE 368
-#define VLAN 369
-#define ID 370
-#define CFI 371
-#define DEI 372
-#define PCP 373
-#define ARP 374
-#define HTYPE 375
-#define PTYPE 376
-#define HLEN 377
-#define PLEN 378
-#define OPERATION 379
-#define IP 380
-#define HDRVERSION 381
-#define HDRLENGTH 382
-#define DSCP 383
-#define ECN 384
-#define LENGTH 385
-#define FRAG_OFF 386
-#define TTL 387
-#define PROTOCOL 388
-#define CHECKSUM 389
-#define PTR 390
-#define VALUE 391
-#define LSRR 392
-#define RR 393
-#define SSRR 394
-#define RA 395
-#define ICMP 396
-#define CODE 397
-#define SEQUENCE 398
-#define GATEWAY 399
-#define MTU 400
-#define IGMP 401
-#define MRT 402
-#define OPTIONS 403
-#define IP6 404
-#define PRIORITY 405
-#define FLOWLABEL 406
-#define NEXTHDR 407
-#define HOPLIMIT 408
-#define ICMP6 409
-#define PPTR 410
-#define MAXDELAY 411
-#define AH 412
-#define RESERVED 413
-#define SPI 414
-#define ESP 415
-#define COMP 416
-#define FLAGS 417
-#define CPI 418
-#define PORT 419
-#define UDP 420
-#define SPORT 421
-#define DPORT 422
-#define UDPLITE 423
-#define CSUMCOV 424
-#define TCP 425
-#define ACKSEQ 426
-#define DOFF 427
-#define WINDOW 428
-#define URGPTR 429
-#define OPTION 430
-#define ECHO 431
-#define EOL 432
-#define NOP 433
-#define SACK 434
-#define SACK0 435
-#define SACK1 436
-#define SACK2 437
-#define SACK3 438
-#define SACK_PERM 439
-#define TIMESTAMP 440
-#define KIND 441
-#define COUNT 442
-#define LEFT 443
-#define RIGHT 444
-#define TSVAL 445
-#define TSECR 446
-#define DCCP 447
-#define SCTP 448
-#define CHUNK 449
-#define DATA 450
-#define INIT 451
-#define INIT_ACK 452
-#define HEARTBEAT 453
-#define HEARTBEAT_ACK 454
-#define ABORT 455
-#define SHUTDOWN 456
-#define SHUTDOWN_ACK 457
-#define ERROR 458
-#define COOKIE_ECHO 459
-#define COOKIE_ACK 460
-#define ECNE 461
-#define CWR 462
-#define SHUTDOWN_COMPLETE 463
-#define ASCONF_ACK 464
-#define FORWARD_TSN 465
-#define ASCONF 466
-#define TSN 467
-#define STREAM 468
-#define SSN 469
-#define PPID 470
-#define INIT_TAG 471
-#define A_RWND 472
-#define NUM_OSTREAMS 473
-#define NUM_ISTREAMS 474
-#define INIT_TSN 475
-#define CUM_TSN_ACK 476
-#define NUM_GACK_BLOCKS 477
-#define NUM_DUP_TSNS 478
-#define LOWEST_TSN 479
-#define SEQNO 480
-#define NEW_CUM_TSN 481
-#define VTAG 482
-#define RT 483
-#define RT0 484
-#define RT2 485
-#define RT4 486
-#define SEG_LEFT 487
-#define ADDR 488
-#define LAST_ENT 489
-#define TAG 490
-#define SID 491
-#define HBH 492
-#define FRAG 493
-#define RESERVED2 494
-#define MORE_FRAGMENTS 495
-#define DST 496
-#define MH 497
-#define META 498
-#define MARK 499
-#define IIF 500
-#define IIFNAME 501
-#define IIFTYPE 502
-#define OIF 503
-#define OIFNAME 504
-#define OIFTYPE 505
-#define SKUID 506
-#define SKGID 507
-#define NFTRACE 508
-#define RTCLASSID 509
-#define IBRIPORT 510
-#define OBRIPORT 511
-#define IBRIDGENAME 512
-#define OBRIDGENAME 513
-#define PKTTYPE 514
-#define CPU 515
-#define IIFGROUP 516
-#define OIFGROUP 517
-#define CGROUP 518
-#define TIME 519
-#define CLASSID 520
-#define NEXTHOP 521
-#define CT 522
-#define L3PROTOCOL 523
-#define PROTO_SRC 524
-#define PROTO_DST 525
-#define ZONE 526
-#define DIRECTION 527
-#define EVENT 528
-#define EXPECTATION 529
-#define EXPIRATION 530
-#define HELPER 531
-#define LABEL 532
-#define STATE 533
-#define STATUS 534
-#define ORIGINAL 535
-#define REPLY 536
-#define COUNTER 537
-#define NAME 538
-#define PACKETS 539
-#define BYTES 540
-#define AVGPKT 541
-#define COUNTERS 542
-#define QUOTAS 543
-#define LIMITS 544
-#define SYNPROXYS 545
-#define HELPERS 546
-#define LOG 547
-#define PREFIX 548
-#define GROUP 549
-#define SNAPLEN 550
-#define QUEUE_THRESHOLD 551
-#define LEVEL 552
-#define LIMIT 553
-#define RATE 554
-#define BURST 555
-#define OVER 556
-#define UNTIL 557
-#define QUOTA 558
-#define USED 559
-#define SECMARK 560
-#define SECMARKS 561
-#define SECOND 562
-#define MINUTE 563
-#define HOUR 564
-#define DAY 565
-#define WEEK 566
-#define _REJECT 567
-#define WITH 568
-#define ICMPX 569
-#define SNAT 570
-#define DNAT 571
-#define MASQUERADE 572
-#define REDIRECT 573
-#define RANDOM 574
-#define FULLY_RANDOM 575
-#define PERSISTENT 576
-#define QUEUE 577
-#define QUEUENUM 578
-#define BYPASS 579
-#define FANOUT 580
-#define DUP 581
-#define FWD 582
-#define NUMGEN 583
-#define INC 584
-#define MOD 585
-#define OFFSET 586
-#define JHASH 587
-#define SYMHASH 588
-#define SEED 589
-#define POSITION 590
-#define INDEX 591
-#define COMMENT 592
-#define XML 593
-#define JSON 594
-#define VM 595
-#define NOTRACK 596
-#define EXISTS 597
-#define MISSING 598
-#define EXTHDR 599
-#define IPSEC 600
-#define REQID 601
-#define SPNUM 602
-#define IN 603
-#define OUT 604
+#define DESTROY 331
+#define MONITOR 332
+#define ALL 333
+#define ACCEPT 334
+#define DROP 335
+#define CONTINUE 336
+#define JUMP 337
+#define GOTO 338
+#define RETURN 339
+#define TO 340
+#define CONSTANT 341
+#define INTERVAL 342
+#define DYNAMIC 343
+#define AUTOMERGE 344
+#define TIMEOUT 345
+#define GC_INTERVAL 346
+#define ELEMENTS 347
+#define EXPIRES 348
+#define POLICY 349
+#define MEMORY 350
+#define PERFORMANCE 351
+#define SIZE 352
+#define FLOW 353
+#define OFFLOAD 354
+#define METER 355
+#define METERS 356
+#define FLOWTABLES 357
+#define NUM 358
+#define STRING 359
+#define QUOTED_STRING 360
+#define ASTERISK_STRING 361
+#define LL_HDR 362
+#define NETWORK_HDR 363
+#define TRANSPORT_HDR 364
+#define BRIDGE 365
+#define ETHER 366
+#define SADDR 367
+#define DADDR 368
+#define TYPE 369
+#define VLAN 370
+#define ID 371
+#define CFI 372
+#define DEI 373
+#define PCP 374
+#define ARP 375
+#define HTYPE 376
+#define PTYPE 377
+#define HLEN 378
+#define PLEN 379
+#define OPERATION 380
+#define IP 381
+#define HDRVERSION 382
+#define HDRLENGTH 383
+#define DSCP 384
+#define ECN 385
+#define LENGTH 386
+#define FRAG_OFF 387
+#define TTL 388
+#define PROTOCOL 389
+#define CHECKSUM 390
+#define PTR 391
+#define VALUE 392
+#define LSRR 393
+#define RR 394
+#define SSRR 395
+#define RA 396
+#define ICMP 397
+#define CODE 398
+#define SEQUENCE 399
+#define GATEWAY 400
+#define MTU 401
+#define IGMP 402
+#define MRT 403
+#define OPTIONS 404
+#define IP6 405
+#define PRIORITY 406
+#define FLOWLABEL 407
+#define NEXTHDR 408
+#define HOPLIMIT 409
+#define ICMP6 410
+#define PPTR 411
+#define MAXDELAY 412
+#define TADDR 413
+#define AH 414
+#define RESERVED 415
+#define SPI 416
+#define ESP 417
+#define COMP 418
+#define FLAGS 419
+#define CPI 420
+#define PORT 421
+#define UDP 422
+#define SPORT 423
+#define DPORT 424
+#define UDPLITE 425
+#define CSUMCOV 426
+#define TCP 427
+#define ACKSEQ 428
+#define DOFF 429
+#define WINDOW 430
+#define URGPTR 431
+#define OPTION 432
+#define ECHO 433
+#define EOL 434
+#define MPTCP 435
+#define NOP 436
+#define SACK 437
+#define SACK0 438
+#define SACK1 439
+#define SACK2 440
+#define SACK3 441
+#define SACK_PERM 442
+#define FASTOPEN 443
+#define MD5SIG 444
+#define TIMESTAMP 445
+#define COUNT 446
+#define LEFT 447
+#define RIGHT 448
+#define TSVAL 449
+#define TSECR 450
+#define SUBTYPE 451
+#define DCCP 452
+#define VXLAN 453
+#define VNI 454
+#define GRE 455
+#define GRETAP 456
+#define GENEVE 457
+#define SCTP 458
+#define CHUNK 459
+#define DATA 460
+#define INIT 461
+#define INIT_ACK 462
+#define HEARTBEAT 463
+#define HEARTBEAT_ACK 464
+#define ABORT 465
+#define SHUTDOWN 466
+#define SHUTDOWN_ACK 467
+#define ERROR 468
+#define COOKIE_ECHO 469
+#define COOKIE_ACK 470
+#define ECNE 471
+#define CWR 472
+#define SHUTDOWN_COMPLETE 473
+#define ASCONF_ACK 474
+#define FORWARD_TSN 475
+#define ASCONF 476
+#define TSN 477
+#define STREAM 478
+#define SSN 479
+#define PPID 480
+#define INIT_TAG 481
+#define A_RWND 482
+#define NUM_OSTREAMS 483
+#define NUM_ISTREAMS 484
+#define INIT_TSN 485
+#define CUM_TSN_ACK 486
+#define NUM_GACK_BLOCKS 487
+#define NUM_DUP_TSNS 488
+#define LOWEST_TSN 489
+#define SEQNO 490
+#define NEW_CUM_TSN 491
+#define VTAG 492
+#define RT 493
+#define RT0 494
+#define RT2 495
+#define RT4 496
+#define SEG_LEFT 497
+#define ADDR 498
+#define LAST_ENT 499
+#define TAG 500
+#define SID 501
+#define HBH 502
+#define FRAG 503
+#define RESERVED2 504
+#define MORE_FRAGMENTS 505
+#define DST 506
+#define MH 507
+#define META 508
+#define MARK 509
+#define IIF 510
+#define IIFNAME 511
+#define IIFTYPE 512
+#define OIF 513
+#define OIFNAME 514
+#define OIFTYPE 515
+#define SKUID 516
+#define SKGID 517
+#define NFTRACE 518
+#define RTCLASSID 519
+#define IBRIPORT 520
+#define OBRIPORT 521
+#define IBRIDGENAME 522
+#define OBRIDGENAME 523
+#define PKTTYPE 524
+#define CPU 525
+#define IIFGROUP 526
+#define OIFGROUP 527
+#define CGROUP 528
+#define TIME 529
+#define CLASSID 530
+#define NEXTHOP 531
+#define CT 532
+#define L3PROTOCOL 533
+#define PROTO_SRC 534
+#define PROTO_DST 535
+#define ZONE 536
+#define DIRECTION 537
+#define EVENT 538
+#define EXPECTATION 539
+#define EXPIRATION 540
+#define HELPER 541
+#define LABEL 542
+#define STATE 543
+#define STATUS 544
+#define ORIGINAL 545
+#define REPLY 546
+#define COUNTER 547
+#define NAME 548
+#define PACKETS 549
+#define BYTES 550
+#define AVGPKT 551
+#define LAST 552
+#define NEVER 553
+#define COUNTERS 554
+#define QUOTAS 555
+#define LIMITS 556
+#define SYNPROXYS 557
+#define HELPERS 558
+#define LOG 559
+#define PREFIX 560
+#define GROUP 561
+#define SNAPLEN 562
+#define QUEUE_THRESHOLD 563
+#define LEVEL 564
+#define LIMIT 565
+#define RATE 566
+#define BURST 567
+#define OVER 568
+#define UNTIL 569
+#define QUOTA 570
+#define USED 571
+#define SECMARK 572
+#define SECMARKS 573
+#define SECOND 574
+#define MINUTE 575
+#define HOUR 576
+#define DAY 577
+#define WEEK 578
+#define _REJECT 579
+#define WITH 580
+#define ICMPX 581
+#define SNAT 582
+#define DNAT 583
+#define MASQUERADE 584
+#define REDIRECT 585
+#define RANDOM 586
+#define FULLY_RANDOM 587
+#define PERSISTENT 588
+#define QUEUE 589
+#define QUEUENUM 590
+#define BYPASS 591
+#define FANOUT 592
+#define DUP 593
+#define FWD 594
+#define NUMGEN 595
+#define INC 596
+#define MOD 597
+#define OFFSET 598
+#define JHASH 599
+#define SYMHASH 600
+#define SEED 601
+#define POSITION 602
+#define INDEX 603
+#define COMMENT 604
+#define XML 605
+#define JSON 606
+#define VM 607
+#define NOTRACK 608
+#define EXISTS 609
+#define MISSING 610
+#define EXTHDR 611
+#define IPSEC 612
+#define REQID 613
+#define SPNUM 614
+#define IN 615
+#define OUT 616
+#define XT 617
 
 /* Value type.  */
 #if ! defined YYSTYPE && ! defined YYSTYPE_IS_DECLARED
-
 union YYSTYPE
 {
-#line 167 "parser_bison.y" /* yacc.c:1921  */
+#line 205 "parser_bison.y"
 
 	uint64_t		val;
 	uint32_t		val32;
@@ -777,10 +810,15 @@ union YYSTYPE
 	struct handle_spec	handle_spec;
 	struct position_spec	position_spec;
 	struct prio_spec	prio_spec;
+	struct limit_rate	limit_rate;
+	struct tcp_kind_field {
+		uint16_t kind; /* must allow > 255 for SACK1, 2.. hack */
+		uint8_t field;
+	} tcp_kind_field;
 
-#line 782 "parser_bison.h" /* yacc.c:1921  */
+#line 820 "parser_bison.h"
+
 };
-
 typedef union YYSTYPE YYSTYPE;
 # define YYSTYPE_IS_TRIVIAL 1
 # define YYSTYPE_IS_DECLARED 1

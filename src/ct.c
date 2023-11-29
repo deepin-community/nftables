@@ -10,11 +10,11 @@
  * Development of this code funded by Astaro AG (http://www.astaro.com/)
  */
 
+#include <nft.h>
+
 #include <stddef.h>
-#include <stdlib.h>
 #include <stdio.h>
 #include <inttypes.h>
-#include <string.h>
 
 #include <netinet/ip.h>
 #include <linux/netfilter.h>
@@ -131,7 +131,7 @@ static const struct symbol_table ct_events_tbl = {
 	},
 };
 
-static const struct datatype ct_event_type = {
+const struct datatype ct_event_type = {
 	.type		= TYPE_CT_EVENTBIT,
 	.name		= "ct_event",
 	.desc		= "conntrack event bits",
@@ -176,7 +176,7 @@ static struct error_record *ct_label_type_parse(struct parse_ctx *ctx,
 {
 	const struct symbolic_constant *s;
 	const struct datatype *dtype;
-	uint8_t data[CT_LABEL_BIT_SIZE];
+	uint8_t data[CT_LABEL_BIT_SIZE / BITS_PER_BYTE];
 	uint64_t bit;
 	mpz_t value;
 
@@ -211,13 +211,12 @@ static struct error_record *ct_label_type_parse(struct parse_ctx *ctx,
 	mpz_export_data(data, value, BYTEORDER_HOST_ENDIAN, sizeof(data));
 
 	*res = constant_expr_alloc(&sym->location, dtype,
-				   dtype->byteorder, sizeof(data),
-				   data);
+				   dtype->byteorder, CT_LABEL_BIT_SIZE, data);
 	mpz_clear(value);
 	return NULL;
 }
 
-static const struct datatype ct_label_type = {
+const struct datatype ct_label_type = {
 	.type		= TYPE_CT_LABEL,
 	.name		= "ct_label",
 	.desc		= "conntrack label",
@@ -272,10 +271,10 @@ const struct ct_template ct_templates[__NFT_CT_MAX] = {
 	[NFT_CT_PROTOCOL]	= CT_TEMPLATE("protocol",   &inet_protocol_type,
 					      BYTEORDER_BIG_ENDIAN,
 					      BITS_PER_BYTE),
-	[NFT_CT_PROTO_SRC]	= CT_TEMPLATE("proto-src",  &invalid_type,
+	[NFT_CT_PROTO_SRC]	= CT_TEMPLATE("proto-src",  &inet_service_type,
 					      BYTEORDER_BIG_ENDIAN,
 					      2 * BITS_PER_BYTE),
-	[NFT_CT_PROTO_DST]	= CT_TEMPLATE("proto-dst",  &invalid_type,
+	[NFT_CT_PROTO_DST]	= CT_TEMPLATE("proto-dst",  &inet_service_type,
 					      BYTEORDER_BIG_ENDIAN,
 					      2 * BITS_PER_BYTE),
 	[NFT_CT_LABELS]		= CT_TEMPLATE("label", &ct_label_type,
@@ -579,6 +578,7 @@ static const struct stmt_ops flow_offload_stmt_ops = {
 	.name		= "flow_offload",
 	.print		= flow_offload_stmt_print,
 	.destroy	= flow_offload_stmt_destroy,
+	.json		= flow_offload_stmt_json,
 };
 
 struct stmt *flow_offload_stmt_alloc(const struct location *loc,

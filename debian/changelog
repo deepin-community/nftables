@@ -1,3 +1,156 @@
+nftables (1.0.9-1) unstable; urgency=medium
+
+  [ Jeremy Sowden ]
+  * [cceedbd] d/clean: add Python egg-info directory
+  * [26632e8] Use the upstream man-pages
+  * [7ace353] d/control: remove unused bison & flex build-deps
+
+  [ Arturo Borrero Gonzalez ]
+  * [83ff316] New upstream version 1.0.9
+  * [0b04e55] d/patches: drop patches integrated upstream
+  * [f6b44a9] d/libnftables1.symbols: refresh file
+
+ -- Arturo Borrero Gonzalez <arturo@debian.org>  Thu, 19 Oct 2023 16:11:15 +0200
+
+nftables (1.0.8-1) unstable; urgency=medium
+
+  [ Arturo Borrero Gonzalez ]
+  * [d80034c] d/upstream/signing-key.asc: refresh key
+  * [1cdf229] Revert "d/watch: use `pgpmode=auto`"
+  * [d13e924] New upstream version 1.0.8
+  * [f6e0491] d/patches: drop 0001-debian-bug-1038724.patch
+  * [464cb02] d/control: bump build-dep on libnftnl
+  * [1d65f36] d/control: add python3-setuptool build-dep
+  * [6b96c7c] d/patches: add 0001-py.patch
+
+  [ Jeremy Sowden ]
+  * [a8248a9] d/u/signing-key.asc: minimize key
+  * [243be3f] d/*.lintian-overrides: override typo false positives
+  * [cfe1e5a] d/rules: in-line configure options
+  * [242e961] d/rules: explicitly build python3 module
+  * [fbd4ae9] d/patches: add upstream patches to add pyproject.toml support
+  * [0b62d3e] d/control: add build-dep on pybuild-plugins-pyproject
+
+ -- Jeremy Sowden <jeremy@azazel.net>  Thu, 03 Aug 2023 14:55:28 +0100
+
+nftables (1.0.7-2) unstable; urgency=medium
+
+  * [800ca9f] d/patches: add 0001-debian-bug-1038724.patch (Closes: #1038724)
+
+ -- Arturo Borrero Gonzalez <arturo@debian.org>  Tue, 20 Jun 2023 17:09:27 +0200
+
+nftables (1.0.7-1) unstable; urgency=medium
+
+  * [5012323] New upstream version 1.0.7
+  * [5965017] d/patches: drop invalid-octal-fix.patch
+
+ -- Arturo Borrero Gonzalez <arturo@debian.org>  Tue, 14 Mar 2023 12:36:06 +0100
+
+nftables (1.0.6-2) unstable; urgency=medium
+
+  [ Jeremy Sowden ]
+  * [5e89bdc] d/patches: add patch to fix handling of invalid octal strings
+    (Closes: #932880)
+  * [df007f6] d/control: bump Standards-Version to 4.6.2
+
+ -- Arturo Borrero Gonzalez <arturo@debian.org>  Sun, 29 Jan 2023 12:33:00 +0100
+
+nftables (1.0.6-1) unstable; urgency=medium
+
+  * [41c144c] d/gbp.conf: make pristine-tar config the default
+  * [69ab9ff] d/watch: refresh tarball extension, use tar.xz
+  * [d6a12b6] New upstream version 1.0.6 (Closes: #932877)
+  * [5bff90c] src:nftables: bump build-dep version libnftnl to 1.2.4
+  * [19569e2] d/patches: drop all patches
+
+ -- Arturo Borrero Gonzalez <arturo@debian.org>  Thu, 22 Dec 2022 12:14:49 +0100
+
+nftables (1.0.5-2) unstable; urgency=medium
+
+  [ Jeremy Sowden ]
+  * [14670b7] d/control: bump Standards-Version to 4.6.1
+  * [accc8cd] d/patches: add patch to fix listing of sets containing
+    unclosed prefix intervals (closes: #1018156)
+  * [f42c641] d/patches: add patch to fix typo's
+  * [46b0bd9] d/rules: `override_dh_fixperms` -> `execute_after_dh_fixperms`
+  * [b639b39] d/rules: fix non-reproducible dates in man-pages
+
+  [ Helmut Grohne ]
+  * [9b4c211] nftables: fix FTCBFS: B-D on a native python (Closes: #1022965)
+
+ -- Arturo Borrero Gonzalez <arturo@debian.org>  Thu, 03 Nov 2022 10:34:20 +0100
+
+nftables (1.0.5-1) unstable; urgency=medium
+
+  * [882aebc] New upstream version 1.0.5
+  * [d1e9d3f] src:nftables: bump build-dep on libnftnl-dev
+
+ -- Arturo Borrero Gonzalez <arturo@debian.org>  Wed, 10 Aug 2022 13:29:18 +0200
+
+nftables (1.0.4-2) unstable; urgency=medium
+
+  * [9e654e0] d/nftables.conf: use named priorities
+  * [0e9757f] d/u/signing-key.asc: minimize signing key
+  * [49d2aee] d/libnftables1.symbols: add `Build-Depends-Package` field
+  * [1a50850] d/control: set R³: no.
+  * [1699c66] d/control: add myself to uploaders.
+  * [cd9f31f] d/watch: use HTTPS URL
+  * [a6a05b6] d/watch: use `pgpmode=auto`
+  * [072624b] d/gbp.conf: buildpackage, import-orig: enable `pristine-tar`
+  * [92a12a3] d/gbp.conf: dch: set `id-length`
+  * [6ad5a0b] d/not-installed: remove static archive
+  * [c53e37d] d/rules: remove obsolete dh_installinit override
+  * [fb41a26] d/rules: move dh_auto_configure override
+  * [59c9317] d/rules: include architecture.mk
+  * [8f18fcd] d/rules: pass `--restart-after-upgrade` to dh_installsystemd
+    (closes: #1012613)
+  * [f9d8a42] d/copyright: remove obsolete files
+  * [75426a2] d/changelog: wrap long line
+
+ -- Jeremy Sowden <jeremy@azazel.net>  Sun, 19 Jun 2022 18:04:19 +0100
+
+nftables (1.0.4-1) unstable; urgency=medium
+
+  [ Christian Ehrhardt ]
+  * [8b15f04] Fix version map usage and add symbols file
+    (Closes: #1007888 LP: #1965464)
+
+  [ Arturo Borrero Gonzalez ]
+  * [527715a] New upstream version 1.0.4
+  * [929b673] d/patches: drop all patches
+  * [1a1a7e5] d/control: bump build-dep on libnftnl
+
+ -- Arturo Borrero Gonzalez <arturo@debian.org>  Wed, 08 Jun 2022 00:59:59 +0200
+
+nftables (1.0.2-1) unstable; urgency=medium
+
+  [ Arturo Borrero Gonzalez ]
+  * d/examples/workstation.nft: update icmpv6 example (Closes: #1000407)
+
+  [ Sven Strickroth ]
+  * Add rules for ICMPv6 packets which must not be dropped
+
+  [ Arturo Borrero Gonzalez ]
+  * New upstream version 1.0.2
+  * d/patches: add 0001-examples-compile.patch
+  * libnftables-dev: include some code examples
+
+ -- Arturo Borrero Gonzalez <arturo@debian.org>  Wed, 23 Feb 2022 12:30:25 +0100
+
+nftables (1.0.1-1) unstable; urgency=medium
+
+  [ Jenkins ]
+  * [5be1165] Remove constraints unnecessary since buster
+
+  [ Arturo Borrero Gonzalez ]
+  * [ddc89dc] nftables: recommend netbase (Closes: #995343)
+  * [1187467] src:nftables: bump std-version to 4.6.0
+  * [ca1f8ef] d/copyright: refresh reference to libnftables.h
+  * [6d3871a] New upstream version 1.0.1
+  * [48ae700] src:nftables: bump build-dep on libnftnl to 1.2.1
+
+ -- Arturo Borrero Gonzalez <arturo@debian.org>  Fri, 19 Nov 2021 14:59:06 +0100
+
 nftables (1.0.0-1) unstable; urgency=medium
 
   * [3d9fb4f] New upstream version 1.0.0

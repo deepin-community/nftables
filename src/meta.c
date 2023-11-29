@@ -10,13 +10,12 @@
  * Development of this code funded by Astaro AG (http://www.astaro.com/)
  */
 
+#include <nft.h>
+
 #include <errno.h>
 #include <limits.h>
 #include <stddef.h>
-#include <stdlib.h>
 #include <stdio.h>
-#include <stdint.h>
-#include <string.h>
 #include <net/if.h>
 #include <net/if_arp.h>
 #include <pwd.h>
@@ -25,6 +24,7 @@
 #include <linux/netfilter.h>
 #include <linux/pkt_sched.h>
 #include <linux/if_packet.h>
+#include <time.h>
 
 #include <nftables.h>
 #include <expression.h>
@@ -36,10 +36,6 @@
 #include <erec.h>
 #include <iface.h>
 #include <json.h>
-
-#define _XOPEN_SOURCE
-#define __USE_XOPEN
-#include <time.h>
 
 static void tchandle_type_print(const struct expr *expr,
 				struct output_ctx *octx)
@@ -220,18 +216,20 @@ static struct error_record *uid_type_parse(struct parse_ctx *ctx,
 					   struct expr **res)
 {
 	struct passwd *pw;
-	uint64_t uid;
+	uid_t uid;
 	char *endptr = NULL;
 
 	pw = getpwnam(sym->identifier);
 	if (pw != NULL)
 		uid = pw->pw_uid;
 	else {
-		uid = strtoull(sym->identifier, &endptr, 10);
-		if (uid > UINT32_MAX)
+		uint64_t _uid = strtoull(sym->identifier, &endptr, 10);
+
+		if (_uid > UINT32_MAX)
 			return error(&sym->location, "Value too large");
 		else if (*endptr)
 			return error(&sym->location, "User does not exist");
+		uid = _uid;
 	}
 
 	*res = constant_expr_alloc(&sym->location, sym->dtype,
@@ -274,18 +272,20 @@ static struct error_record *gid_type_parse(struct parse_ctx *ctx,
 					   struct expr **res)
 {
 	struct group *gr;
-	uint64_t gid;
+	gid_t gid;
 	char *endptr = NULL;
 
 	gr = getgrnam(sym->identifier);
 	if (gr != NULL)
 		gid = gr->gr_gid;
 	else {
-		gid = strtoull(sym->identifier, &endptr, 0);
-		if (gid > UINT32_MAX)
+		uint64_t _gid = strtoull(sym->identifier, &endptr, 0);
+
+		if (_gid > UINT32_MAX)
 			return error(&sym->location, "Value too large");
 		else if (*endptr)
 			return error(&sym->location, "Group does not exist");
+		gid = _gid;
 	}
 
 	*res = constant_expr_alloc(&sym->location, sym->dtype,
@@ -381,51 +381,43 @@ const struct datatype ifname_type = {
 
 static void date_type_print(const struct expr *expr, struct output_ctx *octx)
 {
-	uint64_t tstamp = mpz_get_uint64(expr->value);
-	struct tm *tm, *cur_tm;
+	uint64_t tstamp64 = mpz_get_uint64(expr->value);
 	char timestr[21];
+	time_t tstamp;
+	struct tm tm;
 
 	/* Convert from nanoseconds to seconds */
-	tstamp /= 1000000000L;
+	tstamp64 /= 1000000000L;
 
-	if (!nft_output_seconds(octx)) {
-		/* Obtain current tm, to add tm_gmtoff to the timestamp */
-		cur_tm = localtime((time_t *) &tstamp);
+	/* Obtain current tm, to add tm_gmtoff to the timestamp */
+	tstamp = tstamp64;
+	if (localtime_r(&tstamp, &tm))
+		tstamp64 += tm.tm_gmtoff;
 
-		if (cur_tm)
-			tstamp += cur_tm->tm_gmtoff;
-
-		if ((tm = gmtime((time_t *) &tstamp)) != NULL &&
-			strftime(timestr, sizeof(timestr) - 1, "%F %T", tm))
-			nft_print(octx, "\"%s\"", timestr);
-		else
-			nft_print(octx, "Error converting timestamp to printed time");
-
-		return;
-	}
-
-	/*
-	 * Do our own printing. The default print function will print in
-	 * nanoseconds, which is ugly.
-	 */
-	nft_print(octx, "%" PRIu64, tstamp);
+	tstamp = tstamp64;
+	if (gmtime_r(&tstamp, &tm) &&
+	     strftime(timestr, sizeof(timestr) - 1, "%Y-%m-%d %T", &tm))
+		nft_print(octx, "\"%s\"", timestr);
+	else
+		nft_print(octx, "Error converting timestamp to printed time");
 }
 
-static time_t parse_iso_date(const char *sym)
+static bool parse_iso_date(uint64_t *tstamp, const char *sym)
 {
-	struct tm tm, *cur_tm;
+	struct tm cur_tm;
+	struct tm tm;
 	time_t ts;
 
 	memset(&tm, 0, sizeof(struct tm));
 
-	if (strptime(sym, "%F %T", &tm))
+	if (strptime(sym, "%Y-%m-%d %T", &tm))
 		goto success;
-	if (strptime(sym, "%F %R", &tm))
+	if (strptime(sym, "%Y-%m-%d %R", &tm))
 		goto success;
-	if (strptime(sym, "%F", &tm))
+	if (strptime(sym, "%Y-%m-%d", &tm))
 		goto success;
 
-	return -1;
+	return false;
 
 success:
 	/*
@@ -435,14 +427,17 @@ success:
 	 */
 	ts = timegm(&tm);
 
-	/* Obtain current tm as well (at the specified time), so that we can substract tm_gmtoff */
-	cur_tm = localtime(&ts);
+	if (ts == (time_t) -1)
+		return false;
 
-	if (ts == (time_t) -1 || cur_tm == NULL)
-		return ts;
+	/* Obtain current tm as well (at the specified time), so that we can substract tm_gmtoff */
+	if (!localtime_r(&ts, &cur_tm))
+		return false;
 
 	/* Substract tm_gmtoff to get the current time */
-	return ts - cur_tm->tm_gmtoff;
+	*tstamp = ts - cur_tm.tm_gmtoff;
+
+	return true;
 }
 
 static struct error_record *date_type_parse(struct parse_ctx *ctx,
@@ -450,9 +445,9 @@ static struct error_record *date_type_parse(struct parse_ctx *ctx,
 					    struct expr **res)
 {
 	const char *endptr = sym->identifier;
-	time_t tstamp;
+	uint64_t tstamp;
 
-	if ((tstamp = parse_iso_date(sym->identifier)) != -1)
+	if (parse_iso_date(&tstamp, sym->identifier))
 		goto success;
 
 	tstamp = strtoul(sym->identifier, (char **) &endptr, 10);
@@ -495,20 +490,13 @@ static void day_type_print(const struct expr *expr, struct output_ctx *octx)
 static void hour_type_print(const struct expr *expr, struct output_ctx *octx)
 {
 	uint32_t seconds = mpz_get_uint32(expr->value), minutes, hours;
-	struct tm *cur_tm;
+	struct tm cur_tm;
 	time_t ts;
-
-	if (nft_output_seconds(octx)) {
-		expr_basetype(expr)->print(expr, octx);
-		return;
-	}
 
 	/* Obtain current tm, so that we can add tm_gmtoff */
 	ts = time(NULL);
-	cur_tm = localtime(&ts);
-
-	if (cur_tm)
-		seconds = (seconds + cur_tm->tm_gmtoff) % SECONDS_PER_DAY;
+	if (ts != ((time_t) -1) && localtime_r(&ts, &cur_tm))
+		seconds = (seconds + cur_tm.tm_gmtoff) % SECONDS_PER_DAY;
 
 	minutes = seconds / 60;
 	seconds %= 60;
@@ -526,9 +514,12 @@ static struct error_record *hour_type_parse(struct parse_ctx *ctx,
 					    struct expr **res)
 {
 	struct error_record *er;
-	struct tm tm, *cur_tm;
-	uint64_t result = 0;
+	struct tm cur_tm_data;
+	struct tm *cur_tm;
+	uint32_t result;
+	uint64_t tmp;
 	char *endptr;
+	struct tm tm;
 	time_t ts;
 
 	memset(&tm, 0, sizeof(struct tm));
@@ -542,7 +533,10 @@ static struct error_record *hour_type_parse(struct parse_ctx *ctx,
 
 	/* Obtain current tm, so that we can substract tm_gmtoff */
 	ts = time(NULL);
-	cur_tm = localtime(&ts);
+	if (ts != ((time_t) -1) && localtime_r(&ts, &cur_tm_data))
+		cur_tm = &cur_tm_data;
+	else
+		cur_tm = NULL;
 
 	endptr = strptime(sym->identifier, "%T", &tm);
 	if (endptr && *endptr == '\0')
@@ -555,8 +549,8 @@ static struct error_record *hour_type_parse(struct parse_ctx *ctx,
 	if (endptr && *endptr)
 		return error(&sym->location, "Can't parse trailing input: \"%s\"\n", endptr);
 
-	if ((er = time_parse(&sym->location, sym->identifier, &result)) == NULL) {
-		result /= 1000;
+	if ((er = time_parse(&sym->location, sym->identifier, &tmp)) == NULL) {
+		result = tmp / 1000;
 		goto convert;
 	}
 
@@ -610,7 +604,7 @@ const struct datatype hour_type = {
 	.name = "hour",
 	.desc = "Hour of day of packet reception",
 	.byteorder = BYTEORDER_HOST_ENDIAN,
-	.size = sizeof(uint64_t) * BITS_PER_BYTE,
+	.size = sizeof(uint32_t) * BITS_PER_BYTE,
 	.basetype = &integer_type,
 	.print = hour_type_print,
 	.parse = hour_type_parse,
@@ -706,6 +700,8 @@ const struct meta_template meta_templates[] = {
 	[NFT_META_SDIFNAME]	= META_TEMPLATE("sdifname", &ifname_type,
 						IFNAMSIZ * BITS_PER_BYTE,
 						BYTEORDER_HOST_ENDIAN),
+	[NFT_META_BRI_BROUTE]	= META_TEMPLATE("broute",   &integer_type,
+						1    , BYTEORDER_HOST_ENDIAN),
 };
 
 static bool meta_key_is_unqualified(enum nft_meta_keys key)
@@ -725,12 +721,16 @@ static bool meta_key_is_unqualified(enum nft_meta_keys key)
 
 static void meta_expr_print(const struct expr *expr, struct output_ctx *octx)
 {
-	if (meta_key_is_unqualified(expr->meta.key))
-		nft_print(octx, "%s",
-			  meta_templates[expr->meta.key].token);
+	const char *token = "unknown";
+	uint32_t key = expr->meta.key;
+
+	if (key < array_size(meta_templates))
+		token = meta_templates[key].token;
+
+	if (meta_key_is_unqualified(key))
+		nft_print(octx, "%s", token);
 	else
-		nft_print(octx, "meta %s",
-			  meta_templates[expr->meta.key].token);
+		nft_print(octx, "meta %s", token);
 }
 
 static bool meta_expr_cmp(const struct expr *e1, const struct expr *e2)
@@ -742,6 +742,7 @@ static void meta_expr_clone(struct expr *new, const struct expr *expr)
 {
 	new->meta.key = expr->meta.key;
 	new->meta.base = expr->meta.base;
+	new->meta.inner_desc = expr->meta.inner_desc;
 }
 
 /**
@@ -776,6 +777,11 @@ static void meta_expr_pctx_update(struct proto_ctx *ctx,
 		break;
 	case NFT_META_NFPROTO:
 		protonum = mpz_get_uint8(right->value);
+		if (protonum == NFPROTO_IPV4 && h->desc == &proto_ip)
+			break;
+		else if (protonum == NFPROTO_IPV6 && h->desc == &proto_ip6)
+			break;
+
 		desc = proto_find_upper(h->desc, protonum);
 		if (desc == NULL) {
 			desc = &proto_unknown;
@@ -815,12 +821,18 @@ static void meta_expr_pctx_update(struct proto_ctx *ctx,
 }
 
 #define NFTNL_UDATA_META_KEY 0
-#define NFTNL_UDATA_META_MAX 1
+#define NFTNL_UDATA_META_INNER_DESC 1
+#define NFTNL_UDATA_META_MAX 2
 
 static int meta_expr_build_udata(struct nftnl_udata_buf *udbuf,
 				 const struct expr *expr)
 {
 	nftnl_udata_put_u32(udbuf, NFTNL_UDATA_META_KEY, expr->meta.key);
+
+	if (expr->meta.inner_desc) {
+		nftnl_udata_put_u32(udbuf, NFTNL_UDATA_META_INNER_DESC,
+				    expr->meta.inner_desc->id);
+	}
 
 	return 0;
 }
@@ -833,6 +845,7 @@ static int meta_parse_udata(const struct nftnl_udata *attr, void *data)
 
 	switch (type) {
 	case NFTNL_UDATA_META_KEY:
+	case NFTNL_UDATA_META_INNER_DESC:
 		if (len != sizeof(uint32_t))
 			return -1;
 		break;
@@ -847,6 +860,8 @@ static int meta_parse_udata(const struct nftnl_udata *attr, void *data)
 static struct expr *meta_expr_parse_udata(const struct nftnl_udata *attr)
 {
 	const struct nftnl_udata *ud[NFTNL_UDATA_META_MAX + 1] = {};
+	const struct proto_desc *desc;
+	struct expr *expr;
 	uint32_t key;
 	int err;
 
@@ -860,7 +875,14 @@ static struct expr *meta_expr_parse_udata(const struct nftnl_udata *attr)
 
 	key = nftnl_udata_get_u32(ud[NFTNL_UDATA_META_KEY]);
 
-	return meta_expr_alloc(&internal_location, key);
+	expr = meta_expr_alloc(&internal_location, key);
+
+	if (ud[NFTNL_UDATA_META_INNER_DESC]) {
+		desc = find_proto_desc(ud[NFTNL_UDATA_META_INNER_DESC]);
+		expr->meta.inner_desc = desc;
+	}
+
+	return expr;
 }
 
 const struct expr_ops meta_expr_ops = {
@@ -909,12 +931,16 @@ struct expr *meta_expr_alloc(const struct location *loc, enum nft_meta_keys key)
 
 static void meta_stmt_print(const struct stmt *stmt, struct output_ctx *octx)
 {
+	const char *token = "unknown";
+	uint32_t key = stmt->meta.key;
+
+	if (key < array_size(meta_templates))
+		token = meta_templates[key].token;
+
 	if (meta_key_is_unqualified(stmt->meta.key))
-		nft_print(octx, "%s set ",
-			  meta_templates[stmt->meta.key].token);
+		nft_print(octx, "%s set ", token);
 	else
-		nft_print(octx, "meta %s set ",
-			  meta_templates[stmt->meta.key].token);
+		nft_print(octx, "meta %s set ", token);
 
 	expr_print(stmt->meta.expr, octx);
 }
@@ -939,8 +965,11 @@ struct stmt *meta_stmt_alloc(const struct location *loc, enum nft_meta_keys key,
 
 	stmt = stmt_alloc(loc, &meta_stmt_ops);
 	stmt->meta.key	= key;
-	stmt->meta.tmpl	= &meta_templates[key];
 	stmt->meta.expr	= expr;
+
+	if (key < array_size(meta_templates))
+		stmt->meta.tmpl = &meta_templates[key];
+
 	return stmt;
 }
 
@@ -968,11 +997,11 @@ struct error_record *meta_key_parse(const struct location *loc,
                                     const char *str,
                                     unsigned int *value)
 {
-	int ret, len, offset = 0;
 	const char *sep = "";
+	size_t offset = 0;
 	unsigned int i;
 	char buf[1024];
-	size_t size;
+	size_t len;
 
 	for (i = 0; i < array_size(meta_templates); i++) {
 		if (!meta_templates[i].token || strcmp(meta_templates[i].token, str))
@@ -995,9 +1024,10 @@ struct error_record *meta_key_parse(const struct location *loc,
 	}
 
 	len = (int)sizeof(buf);
-	size = sizeof(buf);
 
 	for (i = 0; i < array_size(meta_templates); i++) {
+		int ret;
+
 		if (!meta_templates[i].token)
 			continue;
 
@@ -1005,8 +1035,8 @@ struct error_record *meta_key_parse(const struct location *loc,
 			sep = ", ";
 
 		ret = snprintf(buf+offset, len, "%s%s", sep, meta_templates[i].token);
-		SNPRINTF_BUFFER_SIZE(ret, size, len, offset);
-		assert(offset < (int)sizeof(buf));
+		SNPRINTF_BUFFER_SIZE(ret, &len, &offset);
+		assert(len > 0);
 	}
 
 	return error(loc, "syntax error, unexpected %s, known keys are %s", str, buf);
