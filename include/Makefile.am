@@ -1,13 +1,16 @@
 SUBDIRS =		linux		\
 			nftables
 
-noinst_HEADERS = 	cli.h		\
+noinst_HEADERS =	cli.h		\
 			cache.h		\
 			cmd.h		\
 			datatype.h	\
+			dccpopt.h	\
+			nft.h	\
 			expression.h	\
 			fib.h		\
 			hash.h		\
+			intervals.h	\
 			ipopt.h		\
 			json.h		\
 			mini-gmp.h	\
@@ -16,7 +19,6 @@ noinst_HEADERS = 	cli.h		\
 			mnl.h		\
 			nftables.h	\
 			payload.h	\
-			rbtree.h	\
 			tcpopt.h	\
 			statement.h	\
 			ct.h		\

@@ -1,5 +1,13 @@
-#include <stdlib.h>
-#include <string.h>
+/*
+ * Copyright (c) 2018 Pablo Neira Ayuso <pablo@netfilter.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 (or any
+ * later) as published by the Free Software Foundation.
+ */
+
+#include <nft.h>
+
 #include <limits.h>
 #include <utils.h>
 #include <misspell.h>

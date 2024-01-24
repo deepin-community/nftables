@@ -8,8 +8,8 @@
  * Development of this code funded by Astaro AG (http://www.astaro.com/)
  */
 
-#include <stdlib.h>
-#include <string.h>
+#include <nft.h>
+
 #include <inttypes.h>
 #include <ctype.h> /* isdigit */
 #include <errno.h>
@@ -28,6 +28,8 @@
 #include <erec.h>
 #include <netlink.h>
 #include <json.h>
+#include <misspell.h>
+#include "nftutils.h"
 
 #include <netinet/ip_icmp.h>
 
@@ -62,6 +64,7 @@ static const struct datatype *datatypes[TYPE_MAX + 1] = {
 	[TYPE_CT_DIR]		= &ct_dir_type,
 	[TYPE_CT_STATUS]	= &ct_status_type,
 	[TYPE_ICMP6_TYPE]	= &icmp6_type_type,
+	[TYPE_CT_LABEL]		= &ct_label_type,
 	[TYPE_PKTTYPE]		= &pkttype_type,
 	[TYPE_ICMP_CODE]	= &icmp_code_type,
 	[TYPE_ICMPV6_CODE]	= &icmpv6_code_type,
@@ -71,6 +74,7 @@ static const struct datatype *datatypes[TYPE_MAX + 1] = {
 	[TYPE_ECN]		= &ecn_type,
 	[TYPE_FIB_ADDR]         = &fib_addr_type,
 	[TYPE_BOOLEAN]		= &boolean_type,
+	[TYPE_CT_EVENTBIT]	= &ct_event_type,
 	[TYPE_IFNAME]		= &ifname_type,
 	[TYPE_IGMP_TYPE]	= &igmp_type_type,
 	[TYPE_TIME_DATE]	= &date_type,
@@ -123,6 +127,7 @@ struct error_record *symbol_parse(struct parse_ctx *ctx, const struct expr *sym,
 				  struct expr **res)
 {
 	const struct datatype *dtype = sym->dtype;
+	struct error_record *erec;
 
 	assert(sym->etype == EXPR_SYMBOL);
 
@@ -136,9 +141,52 @@ struct error_record *symbol_parse(struct parse_ctx *ctx, const struct expr *sym,
 						       res);
 	} while ((dtype = dtype->basetype));
 
-	return error(&sym->location,
-		     "Can't parse symbolic %s expressions",
+	dtype = sym->dtype;
+	if (dtype->err) {
+		erec = dtype->err(sym);
+		if (erec)
+			return erec;
+	}
+
+	return error(&sym->location, "Could not parse symbolic %s expression",
 		     sym->dtype->desc);
+}
+
+static struct error_record *__symbol_parse_fuzzy(const struct expr *sym,
+						 const struct symbol_table *tbl)
+{
+	const struct symbolic_constant *s;
+	struct string_misspell_state st;
+
+	string_misspell_init(&st);
+
+	for (s = tbl->symbols; s->identifier != NULL; s++) {
+		string_misspell_update(sym->identifier, s->identifier,
+				       (void *)s->identifier, &st);
+	}
+
+	if (st.obj) {
+		return error(&sym->location,
+			     "Could not parse %s expression; did you you mean `%s`?",
+			     sym->dtype->desc, st.obj);
+	}
+
+	return NULL;
+}
+
+static struct error_record *symbol_parse_fuzzy(const struct expr *sym,
+					       const struct symbol_table *tbl)
+{
+	struct error_record *erec;
+
+	if (!tbl)
+		return NULL;
+
+	erec = __symbol_parse_fuzzy(sym, tbl);
+	if (erec)
+		return erec;
+
+	return NULL;
 }
 
 struct error_record *symbolic_constant_parse(struct parse_ctx *ctx,
@@ -163,8 +211,16 @@ struct error_record *symbolic_constant_parse(struct parse_ctx *ctx,
 	do {
 		if (dtype->basetype->parse) {
 			erec = dtype->basetype->parse(ctx, sym, res);
-			if (erec != NULL)
-				return erec;
+			if (erec != NULL) {
+				struct error_record *fuzzy_erec;
+
+				fuzzy_erec = symbol_parse_fuzzy(sym, tbl);
+				if (!fuzzy_erec)
+					return erec;
+
+				erec_destroy(erec);
+				return fuzzy_erec;
+			}
 			if (*res)
 				return NULL;
 			goto out;
@@ -321,15 +377,33 @@ static void verdict_type_print(const struct expr *expr, struct output_ctx *octx)
 	}
 }
 
-static struct error_record *verdict_type_parse(struct parse_ctx *ctx,
-					       const struct expr *sym,
-					       struct expr **res)
+static struct error_record *verdict_type_error(const struct expr *sym)
 {
-	*res = constant_expr_alloc(&sym->location, &string_type,
-				   BYTEORDER_HOST_ENDIAN,
-				   (strlen(sym->identifier) + 1) * BITS_PER_BYTE,
-				   sym->identifier);
-	return NULL;
+	/* Skip jump and goto from fuzzy match to provide better error
+	 * reporting, fall back to `jump chain' if no clue.
+	 */
+	static const char *verdict_array[] = {
+		"continue", "break", "return", "accept", "drop", "queue",
+		"stolen", NULL,
+	};
+	struct string_misspell_state st;
+	int i;
+
+	string_misspell_init(&st);
+
+	for (i = 0; verdict_array[i] != NULL; i++) {
+		string_misspell_update(sym->identifier, verdict_array[i],
+				       (void *)verdict_array[i], &st);
+	}
+
+	if (st.obj) {
+		return error(&sym->location, "Could not parse %s; did you mean `%s'?",
+			     sym->dtype->desc, st.obj);
+	}
+
+	/* assume user would like to jump to chain as a hint. */
+	return error(&sym->location, "Could not parse %s; did you mean `jump %s'?",
+		     sym->dtype->desc, sym->identifier);
 }
 
 const struct datatype verdict_type = {
@@ -337,7 +411,7 @@ const struct datatype verdict_type = {
 	.name		= "verdict",
 	.desc		= "netfilter verdict",
 	.print		= verdict_type_print,
-	.parse		= verdict_type_parse,
+	.err		= verdict_type_error,
 };
 
 static const struct symbol_table nfproto_tbl = {
@@ -406,6 +480,22 @@ const struct datatype integer_type = {
 	.name		= "integer",
 	.desc		= "integer",
 	.print		= integer_type_print,
+	.json		= integer_type_json,
+	.parse		= integer_type_parse,
+};
+
+static void xinteger_type_print(const struct expr *expr, struct output_ctx *octx)
+{
+	nft_gmp_print(octx, "0x%Zx", expr->value);
+}
+
+/* Alias of integer_type to print raw payload expressions in hexadecimal. */
+const struct datatype xinteger_type = {
+	.type		= TYPE_INTEGER,
+	.name		= "integer",
+	.desc		= "integer",
+	.basetype	= &integer_type,
+	.print		= xinteger_type_print,
 	.json		= integer_type_json,
 	.parse		= integer_type_parse,
 };
@@ -512,27 +602,34 @@ static struct error_record *ipaddr_type_parse(struct parse_ctx *ctx,
 					      const struct expr *sym,
 					      struct expr **res)
 {
-	struct addrinfo *ai, hints = { .ai_family = AF_INET,
-				       .ai_socktype = SOCK_DGRAM};
-	struct in_addr *addr;
-	int err;
+	struct in_addr addr;
 
-	err = getaddrinfo(sym->identifier, NULL, &hints, &ai);
-	if (err != 0)
-		return error(&sym->location, "Could not resolve hostname: %s",
-			     gai_strerror(err));
+	if (nft_input_no_dns(ctx->input)) {
+		if (inet_pton(AF_INET, sym->identifier, &addr) != 1)
+			return error(&sym->location, "Invalid IPv4 address");
+	} else {
+		struct addrinfo *ai, hints = { .ai_family = AF_INET,
+					       .ai_socktype = SOCK_DGRAM};
+		int err;
 
-	if (ai->ai_next != NULL) {
+		err = getaddrinfo(sym->identifier, NULL, &hints, &ai);
+		if (err != 0)
+			return error(&sym->location, "Could not resolve hostname: %s",
+				     gai_strerror(err));
+
+		if (ai->ai_next != NULL) {
+			freeaddrinfo(ai);
+			return error(&sym->location,
+				     "Hostname resolves to multiple addresses");
+		}
+		assert(ai->ai_addr->sa_family == AF_INET);
+		addr = ((struct sockaddr_in *) (void *) ai->ai_addr)->sin_addr;
 		freeaddrinfo(ai);
-		return error(&sym->location,
-			     "Hostname resolves to multiple addresses");
 	}
 
-	addr = &((struct sockaddr_in *)ai->ai_addr)->sin_addr;
 	*res = constant_expr_alloc(&sym->location, &ipaddr_type,
 				   BYTEORDER_BIG_ENDIAN,
-				   sizeof(*addr) * BITS_PER_BYTE, addr);
-	freeaddrinfo(ai);
+				   sizeof(addr) * BITS_PER_BYTE, &addr);
 	return NULL;
 }
 
@@ -571,27 +668,35 @@ static struct error_record *ip6addr_type_parse(struct parse_ctx *ctx,
 					       const struct expr *sym,
 					       struct expr **res)
 {
-	struct addrinfo *ai, hints = { .ai_family = AF_INET6,
-				       .ai_socktype = SOCK_DGRAM};
-	struct in6_addr *addr;
-	int err;
+	struct in6_addr addr;
 
-	err = getaddrinfo(sym->identifier, NULL, &hints, &ai);
-	if (err != 0)
-		return error(&sym->location, "Could not resolve hostname: %s",
-			     gai_strerror(err));
+	if (nft_input_no_dns(ctx->input)) {
+		if (inet_pton(AF_INET6, sym->identifier, &addr) != 1)
+			return error(&sym->location, "Invalid IPv6 address");
+	} else {
+		struct addrinfo *ai, hints = { .ai_family = AF_INET6,
+					       .ai_socktype = SOCK_DGRAM};
+		int err;
 
-	if (ai->ai_next != NULL) {
+		err = getaddrinfo(sym->identifier, NULL, &hints, &ai);
+		if (err != 0)
+			return error(&sym->location, "Could not resolve hostname: %s",
+				     gai_strerror(err));
+
+		if (ai->ai_next != NULL) {
+			freeaddrinfo(ai);
+			return error(&sym->location,
+				     "Hostname resolves to multiple addresses");
+		}
+
+		assert(ai->ai_addr->sa_family == AF_INET6);
+		addr = ((struct sockaddr_in6 *)(void *)ai->ai_addr)->sin6_addr;
 		freeaddrinfo(ai);
-		return error(&sym->location,
-			     "Hostname resolves to multiple addresses");
 	}
 
-	addr = &((struct sockaddr_in6 *)ai->ai_addr)->sin6_addr;
 	*res = constant_expr_alloc(&sym->location, &ip6addr_type,
 				   BYTEORDER_BIG_ENDIAN,
-				   sizeof(*addr) * BITS_PER_BYTE, addr);
-	freeaddrinfo(ai);
+				   sizeof(addr) * BITS_PER_BYTE, &addr);
 	return NULL;
 }
 
@@ -610,12 +715,11 @@ const struct datatype ip6addr_type = {
 static void inet_protocol_type_print(const struct expr *expr,
 				      struct output_ctx *octx)
 {
-	struct protoent *p;
-
 	if (!nft_output_numeric_proto(octx)) {
-		p = getprotobynumber(mpz_get_uint8(expr->value));
-		if (p != NULL) {
-			nft_print(octx, "%s", p->p_name);
+		char name[NFT_PROTONAME_MAXSIZE];
+
+		if (nft_getprotobynumber(mpz_get_uint8(expr->value), name, sizeof(name))) {
+			nft_print(octx, "%s", name);
 			return;
 		}
 	}
@@ -624,15 +728,15 @@ static void inet_protocol_type_print(const struct expr *expr,
 
 static void inet_protocol_type_describe(struct output_ctx *octx)
 {
-	struct protoent *p;
 	uint8_t protonum;
 
 	for (protonum = 0; protonum < UINT8_MAX; protonum++) {
-		p = getprotobynumber(protonum);
-		if (!p)
+		char name[NFT_PROTONAME_MAXSIZE];
+
+		if (!nft_getprotobynumber(protonum, name, sizeof(name)))
 			continue;
 
-		nft_print(octx, "\t%-30s\t%u\n", p->p_name, protonum);
+		nft_print(octx, "\t%-30s\t%u\n", name, protonum);
 	}
 }
 
@@ -640,7 +744,6 @@ static struct error_record *inet_protocol_type_parse(struct parse_ctx *ctx,
 						     const struct expr *sym,
 						     struct expr **res)
 {
-	struct protoent *p;
 	uint8_t proto;
 	uintmax_t i;
 	char *end;
@@ -653,11 +756,13 @@ static struct error_record *inet_protocol_type_parse(struct parse_ctx *ctx,
 
 		proto = i;
 	} else {
-		p = getprotobyname(sym->identifier);
-		if (p == NULL)
+		int r;
+
+		r = nft_getprotobyname(sym->identifier);
+		if (r < 0)
 			return error(&sym->location, "Could not resolve protocol name");
 
-		proto = p->p_proto;
+		proto = r;
 	}
 
 	*res = constant_expr_alloc(&sym->location, &inet_protocol_type,
@@ -681,12 +786,12 @@ const struct datatype inet_protocol_type = {
 static void inet_service_print(const struct expr *expr, struct output_ctx *octx)
 {
 	uint16_t port = mpz_get_be16(expr->value);
-	const struct servent *s = getservbyport(port, NULL);
+	char name[NFT_SERVNAME_MAXSIZE];
 
-	if (s == NULL)
+	if (!nft_getservbyport(port, NULL, name, sizeof(name)))
 		nft_print(octx, "%hu", ntohs(port));
 	else
-		nft_print(octx, "\"%s\"", s->s_name);
+		nft_print(octx, "\"%s\"", name);
 }
 
 void inet_service_type_print(const struct expr *expr, struct output_ctx *octx)
@@ -721,7 +826,12 @@ static struct error_record *inet_service_type_parse(struct parse_ctx *ctx,
 			return error(&sym->location, "Could not resolve service: %s",
 				     gai_strerror(err));
 
-		port = ((struct sockaddr_in *)ai->ai_addr)->sin_port;
+		if (ai->ai_addr->sa_family == AF_INET) {
+			port = ((struct sockaddr_in *)(void *)ai->ai_addr)->sin_port;
+		} else {
+			assert(ai->ai_addr->sa_family == AF_INET6);
+			port = ((struct sockaddr_in6 *)(void *)ai->ai_addr)->sin6_port;
+		}
 		freeaddrinfo(ai);
 	}
 
@@ -911,6 +1021,11 @@ void time_print(uint64_t ms, struct output_ctx *octx)
 {
 	uint64_t days, hours, minutes, seconds;
 
+	if (nft_output_seconds(octx)) {
+		nft_print(octx, "%" PRIu64 "s", ms / 1000);
+		return;
+	}
+
 	days = ms / 86400000;
 	ms %= 86400000;
 
@@ -1047,6 +1162,7 @@ static struct error_record *time_type_parse(struct parse_ctx *ctx,
 					    struct expr **res)
 {
 	struct error_record *erec;
+	uint32_t s32;
 	uint64_t s;
 
 	erec = time_parse(&sym->location, sym->identifier, &s);
@@ -1056,9 +1172,10 @@ static struct error_record *time_type_parse(struct parse_ctx *ctx,
 	if (s > UINT32_MAX)
 		return error(&sym->location, "value too large");
 
+	s32 = s;
 	*res = constant_expr_alloc(&sym->location, &time_type,
 				   BYTEORDER_HOST_ENDIAN,
-				   sizeof(uint32_t) * BITS_PER_BYTE, &s);
+				   sizeof(uint32_t) * BITS_PER_BYTE, &s32);
 	return NULL;
 }
 
@@ -1067,7 +1184,7 @@ const struct datatype time_type = {
 	.name		= "time",
 	.desc		= "relative time",
 	.byteorder	= BYTEORDER_HOST_ENDIAN,
-	.size		= 8 * BITS_PER_BYTE,
+	.size		= 4 * BITS_PER_BYTE,
 	.basetype	= &integer_type,
 	.print		= time_type_print,
 	.json		= time_type_json,
@@ -1082,17 +1199,18 @@ static struct error_record *concat_type_parse(struct parse_ctx *ctx,
 		     sym->dtype->desc);
 }
 
-static struct datatype *dtype_alloc(void)
+static struct datatype *datatype_alloc(void)
 {
 	struct datatype *dtype;
 
 	dtype = xzalloc(sizeof(*dtype));
 	dtype->flags = DTYPE_F_ALLOC;
+	dtype->refcnt = 1;
 
 	return dtype;
 }
 
-struct datatype *datatype_get(const struct datatype *ptr)
+const struct datatype *datatype_get(const struct datatype *ptr)
 {
 	struct datatype *dtype = (struct datatype *)ptr;
 
@@ -1105,24 +1223,31 @@ struct datatype *datatype_get(const struct datatype *ptr)
 	return dtype;
 }
 
-void datatype_set(struct expr *expr, const struct datatype *dtype)
+void __datatype_set(struct expr *expr, const struct datatype *dtype)
 {
-	if (dtype == expr->dtype)
-		return;
-	datatype_free(expr->dtype);
-	expr->dtype = datatype_get(dtype);
+	const struct datatype *dtype_free;
+
+	dtype_free = expr->dtype;
+	expr->dtype = dtype;
+	datatype_free(dtype_free);
 }
 
-static struct datatype *dtype_clone(const struct datatype *orig_dtype)
+void datatype_set(struct expr *expr, const struct datatype *dtype)
+{
+	if (dtype != expr->dtype)
+		__datatype_set(expr, datatype_get(dtype));
+}
+
+struct datatype *datatype_clone(const struct datatype *orig_dtype)
 {
 	struct datatype *dtype;
 
-	dtype = xzalloc(sizeof(*dtype));
+	dtype = xmalloc(sizeof(*dtype));
 	*dtype = *orig_dtype;
 	dtype->name = xstrdup(orig_dtype->name);
 	dtype->desc = xstrdup(orig_dtype->desc);
 	dtype->flags = DTYPE_F_ALLOC | orig_dtype->flags;
-	dtype->refcnt = 0;
+	dtype->refcnt = 1;
 
 	return dtype;
 }
@@ -1135,6 +1260,9 @@ void datatype_free(const struct datatype *ptr)
 		return;
 	if (!(dtype->flags & DTYPE_F_ALLOC))
 		return;
+
+	assert(dtype->refcnt != 0);
+
 	if (--dtype->refcnt > 0)
 		return;
 
@@ -1169,7 +1297,7 @@ const struct datatype *concat_type_alloc(uint32_t type)
 	}
 	strncat(desc, ")", sizeof(desc) - strlen(desc) - 1);
 
-	dtype		= dtype_alloc();
+	dtype		= datatype_alloc();
 	dtype->type	= type;
 	dtype->size	= size;
 	dtype->subtypes = subtypes;
@@ -1181,15 +1309,15 @@ const struct datatype *concat_type_alloc(uint32_t type)
 }
 
 const struct datatype *set_datatype_alloc(const struct datatype *orig_dtype,
-					  unsigned int byteorder)
+					  enum byteorder byteorder)
 {
 	struct datatype *dtype;
 
 	/* Restrict dynamic datatype allocation to generic integer datatype. */
 	if (orig_dtype != &integer_type)
-		return orig_dtype;
+		return datatype_get(orig_dtype);
 
-	dtype = dtype_clone(orig_dtype);
+	dtype = datatype_clone(orig_dtype);
 	dtype->byteorder = byteorder;
 
 	return dtype;

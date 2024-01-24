@@ -1,12 +1,13 @@
 :input;type filter hook input priority 0
 :ingress;type filter hook ingress device lo priority 0
+:egress;type filter hook egress device lo priority 0
 
 *ip;test-ip4;input
 *ip6;test-ip6;input
 *inet;test-inet;input
 *arp;test-arp;input
 *bridge;test-bridge;input
-*netdev;test-netdev;ingress
+*netdev;test-netdev;ingress,egress
 
 meta length 1000;ok
 meta length 22;ok
@@ -55,6 +56,7 @@ meta mark and 0x03 == 0x01;ok;meta mark & 0x00000003 == 0x00000001
 meta mark and 0x03 != 0x01;ok;meta mark & 0x00000003 != 0x00000001
 meta mark 0x10;ok;meta mark 0x00000010
 meta mark != 0x10;ok;meta mark != 0x00000010
+meta mark 0xffffff00/24;ok
 
 meta mark or 0x03 == 0x01;ok;meta mark | 0x00000003 == 0x00000001
 meta mark or 0x03 != 0x01;ok;meta mark | 0x00000003 != 0x00000001
@@ -206,6 +208,8 @@ meta time "2019-06-21 17:00:00" drop;ok
 meta time "2019-07-01 00:00:00" drop;ok
 meta time "2019-07-01 00:01:00" drop;ok
 meta time "2019-07-01 00:00:01" drop;ok
+meta time < "2022-07-01 11:00:00" accept;ok
+meta time > "2022-07-01 11:00:00" accept;ok
 meta day "Saturday" drop;ok
 meta day 6 drop;ok;meta day "Saturday" drop
 meta day "Satturday" drop;fail
@@ -214,6 +218,8 @@ meta hour "17:00:00" drop;ok;meta hour "17:00" drop
 meta hour "17:00:01" drop;ok
 meta hour "00:00" drop;ok
 meta hour "00:01" drop;ok
+time < "2022-07-01 11:00:00" accept;ok;meta time < "2022-07-01 11:00:00" accept
+time > "2022-07-01 11:00:00" accept;ok;meta time > "2022-07-01 11:00:00" accept
 
 meta time "meh";fail
 meta hour "24:00" drop;fail

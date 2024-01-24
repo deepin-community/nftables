@@ -9,6 +9,7 @@
  */
 
 %{
+#include <nft.h>
 
 #include <ctype.h>
 #include <stddef.h>
@@ -65,16 +66,26 @@ static struct scope *current_scope(const struct parser_state *state)
 	return state->scopes[state->scope];
 }
 
-static void open_scope(struct parser_state *state, struct scope *scope)
+static int open_scope(struct parser_state *state, struct scope *scope)
 {
-	assert(state->scope < array_size(state->scopes) - 1);
+	if (state->scope >= array_size(state->scopes) - 1) {
+		state->scope_err = true;
+		return -1;
+	}
+
 	scope_init(scope, current_scope(state));
 	state->scopes[++state->scope] = scope;
+
+	return 0;
 }
 
 static void close_scope(struct parser_state *state)
 {
-	assert(state->scope > 0);
+	if (state->scope_err || state->scope == 0) {
+		state->scope_err = false;
+		return;
+	}
+
 	state->scope--;
 }
 
@@ -134,6 +145,33 @@ static bool already_set(const void *attr, const struct location *loc,
 	return true;
 }
 
+static struct expr *ifname_expr_alloc(const struct location *location,
+				      struct list_head *queue,
+				      const char *name)
+{
+	unsigned int length = strlen(name);
+	struct expr *expr;
+
+	if (length == 0) {
+		xfree(name);
+		erec_queue(error(location, "empty interface name"), queue);
+		return NULL;
+	}
+
+	if (length > 16) {
+		xfree(name);
+		erec_queue(error(location, "interface name too long"), queue);
+		return NULL;
+	}
+
+	expr = constant_expr_alloc(location, &ifname_type, BYTEORDER_HOST_ENDIAN,
+				   length * BITS_PER_BYTE, name);
+
+	xfree(name);
+
+	return expr;
+}
+
 #define YYLLOC_DEFAULT(Current, Rhs, N)	location_update(&Current, Rhs, N)
 
 #define symbol_value(loc, str) \
@@ -186,6 +224,11 @@ int nft_lex(void *, void *, void *);
 	struct handle_spec	handle_spec;
 	struct position_spec	position_spec;
 	struct prio_spec	prio_spec;
+	struct limit_rate	limit_rate;
+	struct tcp_kind_field {
+		uint16_t kind; /* must allow > 255 for SACK1, 2.. hack */
+		uint8_t field;
+	} tcp_kind_field;
 }
 
 %token TOKEN_EOF 0		"end of file"
@@ -275,6 +318,8 @@ int nft_lex(void *, void *, void *);
 %token DESCRIBE			"describe"
 %token IMPORT			"import"
 %token EXPORT			"export"
+%token DESTROY			"destroy"
+
 %token MONITOR			"monitor"
 
 %token ALL			"all"
@@ -377,6 +422,7 @@ int nft_lex(void *, void *, void *);
 %token ICMP6			"icmpv6"
 %token PPTR			"param-problem"
 %token MAXDELAY			"max-delay"
+%token TADDR			"taddr"
 
 %token AH			"ah"
 %token RESERVED			"reserved"
@@ -403,6 +449,7 @@ int nft_lex(void *, void *, void *);
 %token OPTION			"option"
 %token ECHO			"echo"
 %token EOL			"eol"
+%token MPTCP			"mptcp"
 %token NOP			"nop"
 %token SACK			"sack"
 %token SACK0			"sack0"
@@ -410,15 +457,25 @@ int nft_lex(void *, void *, void *);
 %token SACK2			"sack2"
 %token SACK3			"sack3"
 %token SACK_PERM		"sack-permitted"
+%token FASTOPEN			"fastopen"
+%token MD5SIG			"md5sig"
 %token TIMESTAMP		"timestamp"
-%token KIND			"kind"
 %token COUNT			"count"
 %token LEFT			"left"
 %token RIGHT			"right"
 %token TSVAL			"tsval"
 %token TSECR			"tsecr"
+%token SUBTYPE			"subtype"
 
 %token DCCP			"dccp"
+
+%token VXLAN			"vxlan"
+%token VNI			"vni"
+
+%token GRE			"gre"
+%token GRETAP			"gretap"
+
+%token GENEVE			"geneve"
 
 %token SCTP			"sctp"
 %token CHUNK			"chunk"
@@ -525,6 +582,9 @@ int nft_lex(void *, void *, void *);
 %token BYTES			"bytes"
 %token AVGPKT			"avgpkt"
 
+%token LAST			"last"
+%token NEVER			"never"
+
 %token COUNTERS			"counters"
 %token QUOTAS			"quotas"
 %token LIMITS			"limits"
@@ -607,10 +667,15 @@ int nft_lex(void *, void *, void *);
 %token IN			"in"
 %token OUT			"out"
 
+%token XT		"xt"
+
+%type <limit_rate>		limit_rate_pkts
+%type <limit_rate>		limit_rate_bytes
+
 %type <string>			identifier type_identifier string comment_spec
 %destructor { xfree($$); }	identifier type_identifier string comment_spec
 
-%type <val>			time_spec quota_used
+%type <val>			time_spec time_spec_or_num_s quota_used
 
 %type <expr>			data_type_expr data_type_atom_expr
 %destructor { expr_free($$); }  data_type_expr data_type_atom_expr
@@ -618,8 +683,8 @@ int nft_lex(void *, void *, void *);
 %type <cmd>			line
 %destructor { cmd_free($$); }	line
 
-%type <cmd>			base_cmd add_cmd replace_cmd create_cmd insert_cmd delete_cmd get_cmd list_cmd reset_cmd flush_cmd rename_cmd export_cmd monitor_cmd describe_cmd import_cmd
-%destructor { cmd_free($$); }	base_cmd add_cmd replace_cmd create_cmd insert_cmd delete_cmd get_cmd list_cmd reset_cmd flush_cmd rename_cmd export_cmd monitor_cmd describe_cmd import_cmd
+%type <cmd>			base_cmd add_cmd replace_cmd create_cmd insert_cmd delete_cmd get_cmd list_cmd reset_cmd flush_cmd rename_cmd export_cmd monitor_cmd describe_cmd import_cmd destroy_cmd
+%destructor { cmd_free($$); }	base_cmd add_cmd replace_cmd create_cmd insert_cmd delete_cmd get_cmd list_cmd reset_cmd flush_cmd rename_cmd export_cmd monitor_cmd describe_cmd import_cmd destroy_cmd
 
 %type <handle>			table_spec tableid_spec table_or_id_spec
 %destructor { handle_free(&$$); } table_spec tableid_spec table_or_id_spec
@@ -664,7 +729,7 @@ int nft_lex(void *, void *, void *);
 
 %type <set>			map_block_alloc map_block
 %destructor { set_free($$); }	map_block_alloc
-%type <val>			map_block_obj_type
+%type <val>			map_block_obj_type map_block_data_interval
 
 %type <flowtable>		flowtable_block_alloc flowtable_block
 %destructor { flowtable_free($$); }	flowtable_block_alloc
@@ -676,8 +741,8 @@ int nft_lex(void *, void *, void *);
 %destructor { stmt_list_free($$); xfree($$); } stmt_list stateful_stmt_list set_elem_stmt_list
 %type <stmt>			stmt match_stmt verdict_stmt set_elem_stmt
 %destructor { stmt_free($$); }	stmt match_stmt verdict_stmt set_elem_stmt
-%type <stmt>			counter_stmt counter_stmt_alloc stateful_stmt
-%destructor { stmt_free($$); }	counter_stmt counter_stmt_alloc stateful_stmt
+%type <stmt>			counter_stmt counter_stmt_alloc stateful_stmt last_stmt
+%destructor { stmt_free($$); }	counter_stmt counter_stmt_alloc stateful_stmt last_stmt
 %type <stmt>			payload_stmt
 %destructor { stmt_free($$); }	payload_stmt
 %type <stmt>			ct_stmt
@@ -689,7 +754,7 @@ int nft_lex(void *, void *, void *);
 %type <val>			level_type log_flags log_flags_tcp log_flag_tcp
 %type <stmt>			limit_stmt quota_stmt connlimit_stmt
 %destructor { stmt_free($$); }	limit_stmt quota_stmt connlimit_stmt
-%type <val>			limit_burst_pkts limit_burst_bytes limit_mode time_unit quota_mode
+%type <val>			limit_burst_pkts limit_burst_bytes limit_mode limit_bytes time_unit quota_mode
 %type <stmt>			reject_stmt reject_stmt_alloc
 %destructor { stmt_free($$); }	reject_stmt reject_stmt_alloc
 %type <stmt>			nat_stmt nat_stmt_alloc masq_stmt masq_stmt_alloc redir_stmt redir_stmt_alloc
@@ -705,8 +770,8 @@ int nft_lex(void *, void *, void *);
 
 %type <stmt>			queue_stmt queue_stmt_alloc	queue_stmt_compat
 %destructor { stmt_free($$); }	queue_stmt queue_stmt_alloc	queue_stmt_compat
-%type <expr>			queue_stmt_expr_simple queue_stmt_expr reject_with_expr
-%destructor { expr_free($$); }	queue_stmt_expr_simple queue_stmt_expr reject_with_expr
+%type <expr>			queue_stmt_expr_simple queue_stmt_expr queue_expr reject_with_expr
+%destructor { expr_free($$); }	queue_stmt_expr_simple queue_stmt_expr queue_expr reject_with_expr
 %type <val>			queue_stmt_flags queue_stmt_flag
 %type <stmt>			dup_stmt
 %destructor { stmt_free($$); }	dup_stmt
@@ -870,7 +935,23 @@ int nft_lex(void *, void *, void *);
 %type <expr>			tcp_hdr_expr
 %destructor { expr_free($$); }	tcp_hdr_expr
 %type <val>			tcp_hdr_field
-%type <val>			tcp_hdr_option_type tcp_hdr_option_field
+%type <val>			tcp_hdr_option_type
+%type <val>			tcp_hdr_option_sack
+%type <val>			tcpopt_field_maxseg	tcpopt_field_mptcp	tcpopt_field_sack	 tcpopt_field_tsopt	tcpopt_field_window
+%type <tcp_kind_field>		tcp_hdr_option_kind_and_field
+
+%type <expr>			inner_eth_expr inner_inet_expr inner_expr
+%destructor { expr_free($$); }	inner_eth_expr inner_inet_expr inner_expr
+
+%type <expr>			vxlan_hdr_expr geneve_hdr_expr gre_hdr_expr gretap_hdr_expr
+%destructor { expr_free($$); }	vxlan_hdr_expr geneve_hdr_expr gre_hdr_expr gretap_hdr_expr
+%type <val>			vxlan_hdr_field geneve_hdr_field gre_hdr_field
+
+%type <stmt>			optstrip_stmt
+%destructor { stmt_free($$); }	optstrip_stmt
+
+%type <stmt>			xt_stmt
+%destructor { stmt_free($$); }	xt_stmt
 
 %type <expr>			boolean_expr
 %destructor { expr_free($$); }	boolean_expr
@@ -912,28 +993,61 @@ opt_newline		:	NEWLINE
 		 	|	/* empty */
 			;
 
+close_scope_ah		: { scanner_pop_start_cond(nft->scanner, PARSER_SC_EXPR_AH); };
 close_scope_arp		: { scanner_pop_start_cond(nft->scanner, PARSER_SC_ARP); };
+close_scope_at		: { scanner_pop_start_cond(nft->scanner, PARSER_SC_AT); };
+close_scope_comp	: { scanner_pop_start_cond(nft->scanner, PARSER_SC_EXPR_COMP); };
 close_scope_ct		: { scanner_pop_start_cond(nft->scanner, PARSER_SC_CT); };
 close_scope_counter	: { scanner_pop_start_cond(nft->scanner, PARSER_SC_COUNTER); };
+close_scope_last	: { scanner_pop_start_cond(nft->scanner, PARSER_SC_LAST); };
+close_scope_dccp	: { scanner_pop_start_cond(nft->scanner, PARSER_SC_EXPR_DCCP); };
+close_scope_destroy	: { scanner_pop_start_cond(nft->scanner, PARSER_SC_CMD_DESTROY); };
+close_scope_dst		: { scanner_pop_start_cond(nft->scanner, PARSER_SC_EXPR_DST); };
+close_scope_dup		: { scanner_pop_start_cond(nft->scanner, PARSER_SC_STMT_DUP); };
+close_scope_esp		: { scanner_pop_start_cond(nft->scanner, PARSER_SC_EXPR_ESP); };
 close_scope_eth		: { scanner_pop_start_cond(nft->scanner, PARSER_SC_ETH); };
+close_scope_export	: { scanner_pop_start_cond(nft->scanner, PARSER_SC_CMD_EXPORT); };
 close_scope_fib		: { scanner_pop_start_cond(nft->scanner, PARSER_SC_EXPR_FIB); };
+close_scope_frag	: { scanner_pop_start_cond(nft->scanner, PARSER_SC_EXPR_FRAG); };
+close_scope_fwd		: { scanner_pop_start_cond(nft->scanner, PARSER_SC_STMT_FWD); };
+close_scope_gre		: { scanner_pop_start_cond(nft->scanner, PARSER_SC_GRE); };
 close_scope_hash	: { scanner_pop_start_cond(nft->scanner, PARSER_SC_EXPR_HASH); };
+close_scope_hbh		: { scanner_pop_start_cond(nft->scanner, PARSER_SC_EXPR_HBH); };
 close_scope_ip		: { scanner_pop_start_cond(nft->scanner, PARSER_SC_IP); };
 close_scope_ip6		: { scanner_pop_start_cond(nft->scanner, PARSER_SC_IP6); };
 close_scope_vlan	: { scanner_pop_start_cond(nft->scanner, PARSER_SC_VLAN); };
+close_scope_icmp	: { scanner_pop_start_cond(nft->scanner, PARSER_SC_ICMP); };
+close_scope_igmp	: { scanner_pop_start_cond(nft->scanner, PARSER_SC_IGMP); };
+close_scope_import	: { scanner_pop_start_cond(nft->scanner, PARSER_SC_CMD_IMPORT); };
 close_scope_ipsec	: { scanner_pop_start_cond(nft->scanner, PARSER_SC_EXPR_IPSEC); };
 close_scope_list	: { scanner_pop_start_cond(nft->scanner, PARSER_SC_CMD_LIST); };
 close_scope_limit	: { scanner_pop_start_cond(nft->scanner, PARSER_SC_LIMIT); };
+close_scope_meta	: { scanner_pop_start_cond(nft->scanner, PARSER_SC_META); };
+close_scope_mh		: { scanner_pop_start_cond(nft->scanner, PARSER_SC_EXPR_MH); };
+close_scope_monitor	: { scanner_pop_start_cond(nft->scanner, PARSER_SC_CMD_MONITOR); };
+close_scope_nat		: { scanner_pop_start_cond(nft->scanner, PARSER_SC_STMT_NAT); };
 close_scope_numgen	: { scanner_pop_start_cond(nft->scanner, PARSER_SC_EXPR_NUMGEN); };
+close_scope_osf		: { scanner_pop_start_cond(nft->scanner, PARSER_SC_EXPR_OSF); };
+close_scope_policy	: { scanner_pop_start_cond(nft->scanner, PARSER_SC_POLICY); };
 close_scope_quota	: { scanner_pop_start_cond(nft->scanner, PARSER_SC_QUOTA); };
 close_scope_queue	: { scanner_pop_start_cond(nft->scanner, PARSER_SC_EXPR_QUEUE); };
+close_scope_reject	: { scanner_pop_start_cond(nft->scanner, PARSER_SC_STMT_REJECT); };
+close_scope_reset	: { scanner_pop_start_cond(nft->scanner, PARSER_SC_CMD_RESET); };
 close_scope_rt		: { scanner_pop_start_cond(nft->scanner, PARSER_SC_EXPR_RT); };
 close_scope_sctp	: { scanner_pop_start_cond(nft->scanner, PARSER_SC_SCTP); };
 close_scope_sctp_chunk	: { scanner_pop_start_cond(nft->scanner, PARSER_SC_EXPR_SCTP_CHUNK); };
 close_scope_secmark	: { scanner_pop_start_cond(nft->scanner, PARSER_SC_SECMARK); };
 close_scope_socket	: { scanner_pop_start_cond(nft->scanner, PARSER_SC_EXPR_SOCKET); }
+close_scope_tcp		: { scanner_pop_start_cond(nft->scanner, PARSER_SC_TCP); };
+close_scope_tproxy	: { scanner_pop_start_cond(nft->scanner, PARSER_SC_STMT_TPROXY); };
+close_scope_type	: { scanner_pop_start_cond(nft->scanner, PARSER_SC_TYPE); };
+close_scope_th		: { scanner_pop_start_cond(nft->scanner, PARSER_SC_EXPR_TH); };
+close_scope_udp		: { scanner_pop_start_cond(nft->scanner, PARSER_SC_EXPR_UDP); };
+close_scope_udplite	: { scanner_pop_start_cond(nft->scanner, PARSER_SC_EXPR_UDPLITE); };
 
 close_scope_log		: { scanner_pop_start_cond(nft->scanner, PARSER_SC_STMT_LOG); }
+close_scope_synproxy	: { scanner_pop_start_cond(nft->scanner, PARSER_SC_STMT_SYNPROXY); }
+close_scope_xt		: { scanner_pop_start_cond(nft->scanner, PARSER_SC_XT); }
 
 common_block		:	INCLUDE		QUOTED_STRING	stmt_separator
 			{
@@ -1016,13 +1130,14 @@ base_cmd		:	/* empty */	add_cmd		{ $$ = $1; }
 			|	DELETE		delete_cmd	{ $$ = $2; }
 			|	GET		get_cmd		{ $$ = $2; }
 			|	LIST		list_cmd	close_scope_list	{ $$ = $2; }
-			|	RESET		reset_cmd	{ $$ = $2; }
+			|	RESET		reset_cmd	close_scope_reset	{ $$ = $2; }
 			|	FLUSH		flush_cmd	{ $$ = $2; }
 			|	RENAME		rename_cmd	{ $$ = $2; }
-			|       IMPORT          import_cmd      { $$ = $2; }
-			|	EXPORT		export_cmd	{ $$ = $2; }
-			|	MONITOR		monitor_cmd	{ $$ = $2; }
+			|       IMPORT          import_cmd	close_scope_import	{ $$ = $2; }
+			|	EXPORT		export_cmd	close_scope_export	{ $$ = $2; }
+			|	MONITOR		monitor_cmd	close_scope_monitor	{ $$ = $2; }
 			|	DESCRIBE	describe_cmd	{ $$ = $2; }
+			|	DESTROY		destroy_cmd	close_scope_destroy	{ $$ = $2; }
 			;
 
 add_cmd			:	TABLE		table_spec
@@ -1134,11 +1249,11 @@ add_cmd			:	TABLE		table_spec
 			{
 				$$ = cmd_alloc(CMD_ADD, CMD_OBJ_SECMARK, &$2, &@$, $3);
 			}
-			|	SYNPROXY	obj_spec	synproxy_obj	synproxy_config
+			|	SYNPROXY	obj_spec	synproxy_obj	synproxy_config	close_scope_synproxy
 			{
 				$$ = cmd_alloc(CMD_ADD, CMD_OBJ_SYNPROXY, &$2, &@$, $3);
 			}
-			|	SYNPROXY	obj_spec	synproxy_obj	'{' synproxy_block '}'
+			|	SYNPROXY	obj_spec	synproxy_obj	'{' synproxy_block '}'	close_scope_synproxy
 			{
 				$$ = cmd_alloc(CMD_ADD, CMD_OBJ_SYNPROXY, &$2, &@$, $3);
 			}
@@ -1235,7 +1350,7 @@ create_cmd		:	TABLE		table_spec
 			{
 				$$ = cmd_alloc(CMD_CREATE, CMD_OBJ_SECMARK, &$2, &@$, $3);
 			}
-			|	SYNPROXY	obj_spec	synproxy_obj	synproxy_config
+			|	SYNPROXY	obj_spec	synproxy_obj	synproxy_config	close_scope_synproxy
 			{
 				$$ = cmd_alloc(CMD_CREATE, CMD_OBJ_SYNPROXY, &$2, &@$, $3);
 			}
@@ -1270,6 +1385,13 @@ delete_cmd		:	TABLE		table_or_id_spec
 			|	CHAIN		chain_or_id_spec
 			{
 				$$ = cmd_alloc(CMD_DELETE, CMD_OBJ_CHAIN, &$2, &@$, NULL);
+			}
+			|	CHAIN		chain_spec	chain_block_alloc
+						'{'	chain_block	'}'
+			{
+				$5->location = @5;
+				handle_merge(&$3->handle, &$2);
+				$$ = cmd_alloc(CMD_DELETE, CMD_OBJ_CHAIN, &$2, &@$, $5);
 			}
 			|	RULE		ruleid_spec
 			{
@@ -1324,11 +1446,79 @@ delete_cmd		:	TABLE		table_or_id_spec
 			{
 				$$ = cmd_alloc(CMD_DELETE, CMD_OBJ_SECMARK, &$2, &@$, NULL);
 			}
-			|	SYNPROXY	obj_or_id_spec
+			|	SYNPROXY	obj_or_id_spec	close_scope_synproxy
 			{
 				$$ = cmd_alloc(CMD_DELETE, CMD_OBJ_SYNPROXY, &$2, &@$, NULL);
 			}
 			;
+
+destroy_cmd		:	TABLE		table_or_id_spec
+			{
+				$$ = cmd_alloc(CMD_DESTROY, CMD_OBJ_TABLE, &$2, &@$, NULL);
+			}
+			|	CHAIN		chain_or_id_spec
+			{
+				$$ = cmd_alloc(CMD_DESTROY, CMD_OBJ_CHAIN, &$2, &@$, NULL);
+			}
+			|	RULE		ruleid_spec
+			{
+				$$ = cmd_alloc(CMD_DESTROY, CMD_OBJ_RULE, &$2, &@$, NULL);
+			}
+			|	SET		set_or_id_spec
+			{
+				$$ = cmd_alloc(CMD_DESTROY, CMD_OBJ_SET, &$2, &@$, NULL);
+			}
+			|	MAP		set_spec
+			{
+				$$ = cmd_alloc(CMD_DESTROY, CMD_OBJ_SET, &$2, &@$, NULL);
+			}
+			|	ELEMENT		set_spec	set_block_expr
+			{
+				$$ = cmd_alloc(CMD_DESTROY, CMD_OBJ_ELEMENTS, &$2, &@$, $3);
+			}
+			|	FLOWTABLE	flowtable_spec
+			{
+				$$ = cmd_alloc(CMD_DESTROY, CMD_OBJ_FLOWTABLE, &$2, &@$, NULL);
+			}
+			|	FLOWTABLE	flowtableid_spec
+			{
+				$$ = cmd_alloc(CMD_DESTROY, CMD_OBJ_FLOWTABLE, &$2, &@$, NULL);
+			}
+			|	FLOWTABLE	flowtable_spec	flowtable_block_alloc
+						'{'	flowtable_block	'}'
+			{
+				$5->location = @5;
+				handle_merge(&$3->handle, &$2);
+				$$ = cmd_alloc(CMD_DESTROY, CMD_OBJ_FLOWTABLE, &$2, &@$, $5);
+			}
+			|	COUNTER		obj_or_id_spec	close_scope_counter
+			{
+				$$ = cmd_alloc(CMD_DESTROY, CMD_OBJ_COUNTER, &$2, &@$, NULL);
+			}
+			|	QUOTA		obj_or_id_spec	close_scope_quota
+			{
+				$$ = cmd_alloc(CMD_DESTROY, CMD_OBJ_QUOTA, &$2, &@$, NULL);
+			}
+			|	CT	ct_obj_type	obj_spec	ct_obj_alloc	close_scope_ct
+			{
+				$$ = cmd_alloc_obj_ct(CMD_DESTROY, $2, &$3, &@$, $4);
+				if ($2 == NFT_OBJECT_CT_TIMEOUT)
+					init_list_head(&$4->ct_timeout.timeout_list);
+			}
+			|	LIMIT		obj_or_id_spec	close_scope_limit
+			{
+				$$ = cmd_alloc(CMD_DESTROY, CMD_OBJ_LIMIT, &$2, &@$, NULL);
+			}
+			|	SECMARK		obj_or_id_spec	close_scope_secmark
+			{
+				$$ = cmd_alloc(CMD_DESTROY, CMD_OBJ_SECMARK, &$2, &@$, NULL);
+			}
+			|	SYNPROXY	obj_or_id_spec	close_scope_synproxy
+			{
+				$$ = cmd_alloc(CMD_DESTROY, CMD_OBJ_SYNPROXY, &$2, &@$, NULL);
+			}
+			;
+
 
 get_cmd			:	ELEMENT		set_spec	set_block_expr
 			{
@@ -1420,7 +1610,7 @@ list_cmd		:	TABLE		table_spec
 			{
 				$$ = cmd_alloc(CMD_LIST, CMD_OBJ_SYNPROXYS, &$3, &@$, NULL);
 			}
-			|	SYNPROXY	obj_spec
+			|	SYNPROXY	obj_spec	close_scope_synproxy
 			{
 				$$ = cmd_alloc(CMD_LIST, CMD_OBJ_SYNPROXY, &$2, &@$, NULL);
 			}
@@ -1498,8 +1688,13 @@ reset_cmd		:	COUNTERS	ruleset_spec
 			{
 				$$ = cmd_alloc(CMD_RESET, CMD_OBJ_COUNTERS, &$2, &@$, NULL);
 			}
+			|	COUNTERS	table_spec
+			{
+				$$ = cmd_alloc(CMD_RESET, CMD_OBJ_COUNTERS, &$2, &@$, NULL);
+			}
 			|	COUNTERS	TABLE	table_spec
 			{
+				/* alias of previous rule. */
 				$$ = cmd_alloc(CMD_RESET, CMD_OBJ_COUNTERS, &$3, &@$, NULL);
 			}
 			|       COUNTER         obj_spec	close_scope_counter
@@ -1514,9 +1709,52 @@ reset_cmd		:	COUNTERS	ruleset_spec
 			{
 				$$ = cmd_alloc(CMD_RESET, CMD_OBJ_QUOTAS, &$3, &@$, NULL);
 			}
+			|	QUOTAS		table_spec
+			{
+				/* alias of previous rule. */
+				$$ = cmd_alloc(CMD_RESET, CMD_OBJ_QUOTAS, &$2, &@$, NULL);
+			}
 			|       QUOTA           obj_spec	close_scope_quota
 			{
 				$$ = cmd_alloc(CMD_RESET, CMD_OBJ_QUOTA, &$2, &@$, NULL);
+			}
+			|	RULES		ruleset_spec
+			{
+				$$ = cmd_alloc(CMD_RESET, CMD_OBJ_RULES, &$2, &@$, NULL);
+			}
+			|	RULES		table_spec
+			{
+				$$ = cmd_alloc(CMD_RESET, CMD_OBJ_RULES, &$2, &@$, NULL);
+			}
+			|	RULES		TABLE	table_spec
+			{
+				/* alias of previous rule. */
+				$$ = cmd_alloc(CMD_RESET, CMD_OBJ_RULES, &$3, &@$, NULL);
+			}
+			|	RULES		chain_spec
+			{
+				$$ = cmd_alloc(CMD_RESET, CMD_OBJ_RULES, &$2, &@$, NULL);
+			}
+			|	RULES		CHAIN	chain_spec
+			{
+				/* alias of previous rule. */
+				$$ = cmd_alloc(CMD_RESET, CMD_OBJ_RULES, &$3, &@$, NULL);
+			}
+			|	RULE		ruleid_spec
+			{
+				$$ = cmd_alloc(CMD_RESET, CMD_OBJ_RULE, &$2, &@$, NULL);
+			}
+			|	ELEMENT		set_spec	set_block_expr
+			{
+				$$ = cmd_alloc(CMD_RESET, CMD_OBJ_ELEMENTS, &$2, &@$, $3);
+			}
+			|	SET		set_or_id_spec
+			{
+				$$ = cmd_alloc(CMD_RESET, CMD_OBJ_SET, &$2, &@$, NULL);
+			}
+			|	MAP		set_or_id_spec
+			{
+				$$ = cmd_alloc(CMD_RESET, CMD_OBJ_MAP, &$2, &@$, NULL);
 			}
 			;
 
@@ -1628,7 +1866,11 @@ describe_cmd		:	primary_expr
 table_block_alloc	:	/* empty */
 			{
 				$$ = table_alloc();
-				open_scope(state, &$$->scope);
+				if (open_scope(state, &$$->scope) < 0) {
+					erec_queue(error(&@$, "too many levels of nesting"),
+						   state->msgs);
+					state->nerrs++;
+				}
 			}
 			;
 
@@ -1776,7 +2018,7 @@ table_block		:	/* empty */	{ $$ = $<table>-1; }
 			}
 			|	table_block	SYNPROXY	obj_identifier
 					obj_block_alloc '{'	synproxy_block	'}'
-					stmt_separator
+					stmt_separator	close_scope_synproxy
 			{
 				$4->location = @3;
 				$4->type = NFT_OBJECT_SYNPROXY;
@@ -1789,8 +2031,12 @@ table_block		:	/* empty */	{ $$ = $<table>-1; }
 
 chain_block_alloc	:	/* empty */
 			{
-				$$ = chain_alloc(NULL);
-				open_scope(state, &$$->scope);
+				$$ = chain_alloc();
+				if (open_scope(state, &$$->scope) < 0) {
+					erec_queue(error(&@$, "too many levels of nesting"),
+						   state->msgs);
+					state->nerrs++;
+				}
 			}
 			;
 
@@ -1804,6 +2050,15 @@ chain_block		:	/* empty */	{ $$ = $<chain>-1; }
 			{
 				list_add_tail(&$2->list, &$1->rules);
 				$$ = $1;
+			}
+			|	chain_block	DEVICES		'='	flowtable_expr	stmt_separator
+			{
+				if ($$->dev_expr) {
+					list_splice_init(&$4->expressions, &$$->dev_expr->expressions);
+					expr_free($4);
+					break;
+				}
+				$$->dev_expr = $4;
 			}
 			|	chain_block	comment_spec	stmt_separator
 			{
@@ -1881,14 +2136,14 @@ typeof_expr		:	primary_expr
 
 set_block_alloc		:	/* empty */
 			{
-				$$ = set_alloc(NULL);
+				$$ = set_alloc(&internal_location);
 			}
 			;
 
 set_block		:	/* empty */	{ $$ = $<set>-1; }
 			|	set_block	common_block
 			|	set_block	stmt_separator
-			|	set_block	TYPE		data_type_expr	stmt_separator
+			|	set_block	TYPE		data_type_expr	stmt_separator	close_scope_type
 			{
 				$1->key = $3;
 				$$ = $1;
@@ -1961,7 +2216,7 @@ set_flag		:	CONSTANT	{ $$ = NFT_SET_CONSTANT; }
 
 map_block_alloc		:	/* empty */
 			{
-				$$ = set_alloc(NULL);
+				$$ = set_alloc(&internal_location);
 			}
 			;
 
@@ -1969,6 +2224,11 @@ map_block_obj_type	:	COUNTER	close_scope_counter { $$ = NFT_OBJECT_COUNTER; }
 			|	QUOTA	close_scope_quota { $$ = NFT_OBJECT_QUOTA; }
 			|	LIMIT	close_scope_limit { $$ = NFT_OBJECT_LIMIT; }
 			|	SECMARK close_scope_secmark { $$ = NFT_OBJECT_SECMARK; }
+			|	SYNPROXY close_scope_synproxy { $$ = NFT_OBJECT_SYNPROXY; }
+			;
+
+map_block_data_interval :	INTERVAL { $$ = EXPR_F_INTERVAL; }
+			|	{ $$ = 0; }
 			;
 
 map_block		:	/* empty */	{ $$ = $<set>-1; }
@@ -1979,23 +2239,18 @@ map_block		:	/* empty */	{ $$ = $<set>-1; }
 				$1->timeout = $3;
 				$$ = $1;
 			}
-			|	map_block	TYPE
-						data_type_expr	COLON	data_type_expr
-						stmt_separator
+			|	map_block	GC_INTERVAL	time_spec	stmt_separator
 			{
-				$1->key = $3;
-				$1->data = $5;
-
-				$1->flags |= NFT_SET_MAP;
+				$1->gc_int = $3;
 				$$ = $1;
 			}
 			|	map_block	TYPE
-						data_type_expr	COLON	INTERVAL	data_type_expr
-						stmt_separator
+						data_type_expr	COLON	map_block_data_interval data_type_expr
+						stmt_separator	close_scope_type
 			{
 				$1->key = $3;
 				$1->data = $6;
-				$1->data->flags |= EXPR_F_INTERVAL;
+				$1->data->flags |= $5;
 
 				$1->flags |= NFT_SET_MAP;
 				$$ = $1;
@@ -2025,7 +2280,7 @@ map_block		:	/* empty */	{ $$ = $<set>-1; }
 			}
 			|	map_block	TYPE
 						data_type_expr	COLON	map_block_obj_type
-						stmt_separator
+						stmt_separator	close_scope_type
 			{
 				$1->key = $3;
 				$1->objtype = $5;
@@ -2060,7 +2315,7 @@ map_block		:	/* empty */	{ $$ = $<set>-1; }
 			|	map_block	set_mechanism	stmt_separator
 			;
 
-set_mechanism		:	POLICY		set_policy_spec
+set_mechanism		:	POLICY		set_policy_spec	close_scope_policy
 			{
 				$<set>0->policy = $2;
 			}
@@ -2076,7 +2331,7 @@ set_policy_spec		:	PERFORMANCE	{ $$ = NFT_SET_POL_PERFORMANCE; }
 
 flowtable_block_alloc	:	/* empty */
 			{
-				$$ = flowtable_alloc(NULL);
+				$$ = flowtable_alloc(&internal_location);
 			}
 			;
 
@@ -2136,12 +2391,23 @@ flowtable_list_expr	:	flowtable_expr_member
 			|	flowtable_list_expr	COMMA	opt_newline
 			;
 
-flowtable_expr_member	:	STRING
+flowtable_expr_member	:	QUOTED_STRING
 			{
-				$$ = constant_expr_alloc(&@$, &string_type,
-							 BYTEORDER_HOST_ENDIAN,
-							 strlen($1) * BITS_PER_BYTE, $1);
-				xfree($1);
+				struct expr *expr = ifname_expr_alloc(&@$, state->msgs, $1);
+
+				if (!expr)
+					YYERROR;
+
+				$$ = expr;
+			}
+			|	STRING
+			{
+				struct expr *expr = ifname_expr_alloc(&@$, state->msgs, $1);
+
+				if (!expr)
+					YYERROR;
+
+				$$ = expr;
 			}
 			|	variable_expr
 			{
@@ -2184,7 +2450,7 @@ data_type_expr		:	data_type_atom_expr
 
 obj_block_alloc		:       /* empty */
 			{
-				$$ = obj_alloc(NULL);
+				$$ = obj_alloc(&internal_location);
 			}
 			;
 
@@ -2335,33 +2601,33 @@ type_identifier		:	STRING	{ $$ = $1; }
 			|	CLASSID { $$ = xstrdup("classid"); }
 			;
 
-hook_spec		:	TYPE		STRING		HOOK		STRING		dev_spec	prio_spec
+hook_spec		:	TYPE		close_scope_type	STRING		HOOK		STRING		dev_spec	prio_spec
 			{
-				const char *chain_type = chain_type_name_lookup($2);
+				const char *chain_type = chain_type_name_lookup($3);
 
 				if (chain_type == NULL) {
-					erec_queue(error(&@2, "unknown chain type"),
+					erec_queue(error(&@3, "unknown chain type"),
 						   state->msgs);
-					xfree($2);
+					xfree($3);
 					YYERROR;
 				}
-				$<chain>0->type.loc = @2;
+				$<chain>0->type.loc = @3;
 				$<chain>0->type.str = xstrdup(chain_type);
-				xfree($2);
+				xfree($3);
 
 				$<chain>0->loc = @$;
-				$<chain>0->hook.loc = @4;
-				$<chain>0->hook.name = chain_hookname_lookup($4);
+				$<chain>0->hook.loc = @5;
+				$<chain>0->hook.name = chain_hookname_lookup($5);
 				if ($<chain>0->hook.name == NULL) {
-					erec_queue(error(&@4, "unknown chain hook"),
+					erec_queue(error(&@5, "unknown chain hook"),
 						   state->msgs);
-					xfree($4);
+					xfree($5);
 					YYERROR;
 				}
-				xfree($4);
+				xfree($5);
 
-				$<chain>0->dev_expr	= $5;
-				$<chain>0->priority	= $6;
+				$<chain>0->dev_expr	= $6;
+				$<chain>0->priority	= $7;
 				$<chain>0->flags	|= CHAIN_F_BASECHAIN;
 			}
 			;
@@ -2442,12 +2708,11 @@ int_num			:	NUM			{ $$ = $1; }
 
 dev_spec		:	DEVICE	string
 			{
-				struct expr *expr;
+				struct expr *expr = ifname_expr_alloc(&@$, state->msgs, $2);
 
-				expr = constant_expr_alloc(&@$, &string_type,
-							   BYTEORDER_HOST_ENDIAN,
-							   strlen($2) * BITS_PER_BYTE, $2);
-				xfree($2);
+				if (!expr)
+					YYERROR;
+
 				$$ = compound_expr_alloc(&@$, EXPR_LIST);
 				compound_expr_add($$, expr);
 
@@ -2471,7 +2736,7 @@ flags_spec		:	FLAGS		OFFLOAD
 			}
 			;
 
-policy_spec		:	POLICY		policy_expr
+policy_spec		:	POLICY		policy_expr	close_scope_policy
 			{
 				if ($<chain>0->policy) {
 					erec_queue(error(&@$, "you cannot set chain policy twice"),
@@ -2503,6 +2768,7 @@ chain_policy		:	ACCEPT		{ $$ = NF_ACCEPT; }
 			;
 
 identifier		:	STRING
+			|	LAST		{ $$ = xstrdup("last"); }
 			;
 
 string			:	STRING
@@ -2523,6 +2789,11 @@ time_spec		:	STRING
 				}
 				$$ = res;
 			}
+			;
+
+/* compatibility kludge to allow either 60, 60s, 1m, ... */
+time_spec_or_num_s	:	NUM
+			|	time_spec { $$ = $1 / 1000u; }
 			;
 
 family_spec		:	/* empty */		{ $$ = NFPROTO_IPV4; }
@@ -2783,6 +3054,7 @@ stateful_stmt		:	counter_stmt	close_scope_counter
 			|	limit_stmt
 			|	quota_stmt
 			|	connlimit_stmt
+			|	last_stmt	close_scope_last
 			;
 
 stmt			:	verdict_stmt
@@ -2792,19 +3064,32 @@ stmt			:	verdict_stmt
 			|	stateful_stmt
 			|	meta_stmt
 			|	log_stmt	close_scope_log
-			|	reject_stmt
-			|	nat_stmt
-			|	tproxy_stmt
+			|	reject_stmt	close_scope_reject
+			|	nat_stmt	close_scope_nat
+			|	tproxy_stmt	close_scope_tproxy
 			|	queue_stmt
 			|	ct_stmt
-			|	masq_stmt
-			|	redir_stmt
-			|	dup_stmt
-			|	fwd_stmt
+			|	masq_stmt	close_scope_nat
+			|	redir_stmt	close_scope_nat
+			|	dup_stmt	close_scope_dup
+			|	fwd_stmt	close_scope_fwd
 			|	set_stmt
 			|	map_stmt
-			|	synproxy_stmt
+			|	synproxy_stmt	close_scope_synproxy
 			|	chain_stmt
+			|	optstrip_stmt
+			|	xt_stmt		close_scope_xt
+			;
+
+xt_stmt			:	XT	STRING	string
+			{
+				$$ = NULL;
+				xfree($2);
+				xfree($3);
+				erec_queue(error(&@$, "unsupported xtables compat expression, use iptables-nft with this ruleset"),
+					   state->msgs);
+				YYERROR;
+			}
 			;
 
 chain_stmt_type		:	JUMP	{ $$ = NFT_JUMP; }
@@ -2859,7 +3144,7 @@ verdict_map_list_expr	:	verdict_map_list_member_expr
 
 verdict_map_list_member_expr:	opt_newline	set_elem_expr	COLON	verdict_expr	opt_newline
 			{
-				$$ = mapping_expr_alloc(&@$, $2, $4);
+				$$ = mapping_expr_alloc(&@2, $2, $4);
 			}
 			;
 
@@ -2905,6 +3190,22 @@ counter_arg		:	PACKETS			NUM
 			|	BYTES			NUM
 			{
 				$<stmt>0->counter.bytes	 = $2;
+			}
+			;
+
+last_stmt		:	LAST
+			{
+				$$ = last_stmt_alloc(&@$);
+			}
+			|	LAST USED	NEVER
+			{
+				$$ = last_stmt_alloc(&@$);
+			}
+			|	LAST USED	time_spec
+			{
+				$$ = last_stmt_alloc(&@$);
+				$$->last.used = $3;
+				$$->last.set = true;
 			}
 			;
 
@@ -3106,7 +3407,7 @@ level_type		:	string
 			}
 			;
 
-log_flags		:	TCP	log_flags_tcp
+log_flags		:	TCP	log_flags_tcp	close_scope_tcp
 			{
 				$$ = $2;
 			}
@@ -3145,42 +3446,26 @@ log_flag_tcp		:	SEQUENCE
 			}
 			;
 
-limit_stmt		:	LIMIT	RATE	limit_mode	NUM	SLASH	time_unit	limit_burst_pkts	close_scope_limit
+limit_stmt		:	LIMIT	RATE	limit_mode	limit_rate_pkts	limit_burst_pkts	close_scope_limit
 	    		{
-				if ($7 == 0) {
-					erec_queue(error(&@7, "limit burst must be > 0"),
+				if ($5 == 0) {
+					erec_queue(error(&@5, "packet limit burst must be > 0"),
 						   state->msgs);
 					YYERROR;
 				}
 				$$ = limit_stmt_alloc(&@$);
-				$$->limit.rate	= $4;
-				$$->limit.unit	= $6;
-				$$->limit.burst	= $7;
+				$$->limit.rate	= $4.rate;
+				$$->limit.unit	= $4.unit;
+				$$->limit.burst	= $5;
 				$$->limit.type	= NFT_LIMIT_PKTS;
 				$$->limit.flags = $3;
 			}
-			|	LIMIT	RATE	limit_mode	NUM	STRING	limit_burst_bytes	close_scope_limit
+			|	LIMIT	RATE	limit_mode	limit_rate_bytes	limit_burst_bytes	close_scope_limit
 			{
-				struct error_record *erec;
-				uint64_t rate, unit;
-
-				if ($6 == 0) {
-					erec_queue(error(&@6, "limit burst must be > 0"),
-						   state->msgs);
-					YYERROR;
-				}
-
-				erec = rate_parse(&@$, $5, &rate, &unit);
-				xfree($5);
-				if (erec != NULL) {
-					erec_queue(erec, state->msgs);
-					YYERROR;
-				}
-
 				$$ = limit_stmt_alloc(&@$);
-				$$->limit.rate	= rate * $4;
-				$$->limit.unit	= unit;
-				$$->limit.burst	= $6;
+				$$->limit.rate	= $4.rate;
+				$$->limit.unit	= $4.unit;
+				$$->limit.burst	= $5;
 				$$->limit.type	= NFT_LIMIT_PKT_BYTES;
 				$$->limit.flags = $3;
 			}
@@ -3250,20 +3535,51 @@ limit_burst_pkts	:	/* empty */			{ $$ = 5; }
 			|	BURST	NUM	PACKETS		{ $$ = $2; }
 			;
 
-limit_burst_bytes	:	/* empty */			{ $$ = 5; }
-			|	BURST	NUM	BYTES		{ $$ = $2; }
-			|	BURST	NUM	STRING
+limit_rate_pkts		:	NUM     SLASH	time_unit
+			{
+				$$.rate = $1;
+				$$.unit = $3;
+			}
+			;
+
+limit_burst_bytes	:	/* empty */			{ $$ = 0; }
+			|	BURST	limit_bytes		{ $$ = $2; }
+			;
+
+limit_rate_bytes	:	NUM     STRING
 			{
 				struct error_record *erec;
-				uint64_t rate;
+				uint64_t rate, unit;
 
-				erec = data_unit_parse(&@$, $3, &rate);
-				xfree($3);
+				erec = rate_parse(&@$, $2, &rate, &unit);
+				xfree($2);
 				if (erec != NULL) {
 					erec_queue(erec, state->msgs);
 					YYERROR;
 				}
-				$$ = $2 * rate;
+				$$.rate = rate * $1;
+				$$.unit = unit;
+			}
+			|	limit_bytes SLASH time_unit
+			{
+				$$.rate = $1;
+				$$.unit = $3;
+			}
+			;
+
+limit_bytes		:	NUM	BYTES		{ $$ = $1; }
+			|	NUM	STRING
+			{
+				struct error_record *erec;
+				uint64_t rate;
+
+				erec = data_unit_parse(&@$, $2, &rate);
+				xfree($2);
+				if (erec != NULL) {
+					erec_queue(erec, state->msgs);
+					YYERROR;
+				}
+				$$ = $1 * rate;
 			}
 			;
 
@@ -3297,7 +3613,7 @@ reject_opts		:       /* empty */
 				$<stmt>0->reject.type = -1;
 				$<stmt>0->reject.icmp_code = -1;
 			}
-			|	WITH	ICMP	TYPE	reject_with_expr
+			|	WITH	ICMP	TYPE	reject_with_expr close_scope_type close_scope_icmp
 			{
 				$<stmt>0->reject.family = NFPROTO_IPV4;
 				$<stmt>0->reject.type = NFT_REJECT_ICMP_UNREACH;
@@ -3311,7 +3627,7 @@ reject_opts		:       /* empty */
 				$<stmt>0->reject.expr = $3;
 				datatype_set($<stmt>0->reject.expr, &icmp_code_type);
 			}
-			|	WITH	ICMP6	TYPE	reject_with_expr
+			|	WITH	ICMP6	TYPE	reject_with_expr close_scope_type close_scope_icmp
 			{
 				$<stmt>0->reject.family = NFPROTO_IPV6;
 				$<stmt>0->reject.type = NFT_REJECT_ICMP_UNREACH;
@@ -3325,7 +3641,7 @@ reject_opts		:       /* empty */
 				$<stmt>0->reject.expr = $3;
 				datatype_set($<stmt>0->reject.expr, &icmpv6_code_type);
 			}
-			|	WITH	ICMPX	TYPE	reject_with_expr
+			|	WITH	ICMPX	TYPE	reject_with_expr close_scope_type
 			{
 				$<stmt>0->reject.type = NFT_REJECT_ICMPX_UNREACH;
 				$<stmt>0->reject.expr = $4;
@@ -3337,7 +3653,7 @@ reject_opts		:       /* empty */
 				$<stmt>0->reject.expr = $3;
 				datatype_set($<stmt>0->reject.expr, &icmpx_code_type);
 			}
-			|	WITH	TCP	RESET
+			|	WITH	TCP	close_scope_tcp RESET close_scope_reset
 			{
 				$<stmt>0->reject.type = NFT_REJECT_TCP_RST;
 			}
@@ -3346,8 +3662,8 @@ reject_opts		:       /* empty */
 nat_stmt		:	nat_stmt_alloc	nat_stmt_args
 			;
 
-nat_stmt_alloc		:	SNAT	{ $$ = nat_stmt_alloc(&@$, NFT_NAT_SNAT); }
-			|	DNAT	{ $$ = nat_stmt_alloc(&@$, NFT_NAT_DNAT); }
+nat_stmt_alloc		:	SNAT	{ $$ = nat_stmt_alloc(&@$, __NFT_NAT_SNAT); }
+			|	DNAT	{ $$ = nat_stmt_alloc(&@$, __NFT_NAT_DNAT); }
 			;
 
 tproxy_stmt		:	TPROXY TO stmt_expr
@@ -3790,13 +4106,22 @@ queue_stmt_arg		:	QUEUENUM	queue_stmt_expr_simple
 			}
 			;
 
+queue_expr		:	variable_expr
+			|	integer_expr
+			;
+
 queue_stmt_expr_simple	:	integer_expr
-			|	range_rhs_expr
+			|	variable_expr
+			|	queue_expr	DASH	queue_expr
+			{
+				$$ = range_expr_alloc(&@$, $1, $3);
+			}
 			;
 
 queue_stmt_expr		:	numgen_expr
 			|	hash_expr
 			|	map_expr
+			|	queue_stmt_expr_simple
 			;
 
 queue_stmt_flags	:	queue_stmt_flag
@@ -3965,7 +4290,7 @@ set_ref_expr		:	set_ref_symbol_expr
 			|	variable_expr
 			;
 
-set_ref_symbol_expr	:	AT	identifier
+set_ref_symbol_expr	:	AT	identifier	close_scope_at
 			{
 				$$ = symbol_expr_alloc(&@$, SYMBOL_SET,
 						       current_scope(state),
@@ -4027,7 +4352,7 @@ fib_expr		:	FIB	fib_tuple	fib_result	close_scope_fib
 
 fib_result		:	OIF	{ $$ =NFT_FIB_RESULT_OIF; }
 			|	OIFNAME { $$ =NFT_FIB_RESULT_OIFNAME; }
-			|	TYPE	{ $$ =NFT_FIB_RESULT_ADDRTYPE; }
+			|	TYPE	close_scope_type	{ $$ =NFT_FIB_RESULT_ADDRTYPE; }
 			;
 
 fib_flag		:       SADDR	{ $$ = NFTA_FIB_F_SADDR; }
@@ -4044,11 +4369,11 @@ fib_tuple		:  	fib_flag	DOT	fib_tuple
 			|	fib_flag
 			;
 
-osf_expr		:	OSF	osf_ttl		HDRVERSION
+osf_expr		:	OSF	osf_ttl		HDRVERSION	close_scope_osf
 			{
 				$$ = osf_expr_alloc(&@$, $2, NFT_OSF_F_VERSION);
 			}
-			|	OSF	osf_ttl		NAME
+			|	OSF	osf_ttl		NAME	close_scope_osf
 			{
 				$$ = osf_expr_alloc(&@$, $2, 0);
 			}
@@ -4178,7 +4503,7 @@ set_list_member_expr	:	opt_newline	set_expr	opt_newline
 			}
 			|	opt_newline	set_elem_expr	COLON	set_rhs_expr	opt_newline
 			{
-				$$ = mapping_expr_alloc(&@$, $2, $4);
+				$$ = mapping_expr_alloc(&@2, $2, $4);
 			}
 			;
 
@@ -4271,44 +4596,34 @@ set_elem_stmt		:	COUNTER	close_scope_counter
 				$$->counter.packets = $3;
 				$$->counter.bytes = $5;
 			}
-			|	LIMIT   RATE    limit_mode      NUM     SLASH   time_unit       limit_burst_pkts	close_scope_limit
+			|	LIMIT   RATE    limit_mode      limit_rate_pkts       limit_burst_pkts	close_scope_limit
 			{
-				if ($7 == 0) {
-					erec_queue(error(&@7, "limit burst must be > 0"),
+				if ($5 == 0) {
+					erec_queue(error(&@5, "limit burst must be > 0"),
 						   state->msgs);
 					YYERROR;
 				}
 				$$ = limit_stmt_alloc(&@$);
-				$$->limit.rate  = $4;
-				$$->limit.unit  = $6;
-				$$->limit.burst = $7;
+				$$->limit.rate  = $4.rate;
+				$$->limit.unit  = $4.unit;
+				$$->limit.burst = $5;
 				$$->limit.type  = NFT_LIMIT_PKTS;
 				$$->limit.flags = $3;
 			}
-			|       LIMIT   RATE    limit_mode      NUM     STRING  limit_burst_bytes	close_scope_limit
+			|       LIMIT   RATE    limit_mode      limit_rate_bytes  limit_burst_bytes	close_scope_limit
 			{
-				struct error_record *erec;
-				uint64_t rate, unit;
-
-				if ($6 == 0) {
+				if ($5 == 0) {
 					erec_queue(error(&@6, "limit burst must be > 0"),
 						   state->msgs);
 					YYERROR;
 				}
-				erec = rate_parse(&@$, $5, &rate, &unit);
-				xfree($5);
-				if (erec != NULL) {
-					erec_queue(erec, state->msgs);
-					YYERROR;
-				}
-
 				$$ = limit_stmt_alloc(&@$);
-				$$->limit.rate  = rate * $4;
-				$$->limit.unit  = unit;
-				$$->limit.burst = $6;
+				$$->limit.rate  = $4.rate;
+				$$->limit.unit  = $4.unit;
+				$$->limit.burst = $5;
 				$$->limit.type  = NFT_LIMIT_PKT_BYTES;
 				$$->limit.flags = $3;
-                        }
+			}
 			|	CT	COUNT	NUM	close_scope_ct
 			{
 				$$ = connlimit_stmt_alloc(&@$);
@@ -4319,6 +4634,32 @@ set_elem_stmt		:	COUNTER	close_scope_counter
 				$$ = connlimit_stmt_alloc(&@$);
 				$$->connlimit.count = $4;
 				$$->connlimit.flags = NFT_CONNLIMIT_F_INV;
+			}
+			|	QUOTA	quota_mode NUM quota_unit quota_used	close_scope_quota
+			{
+				struct error_record *erec;
+				uint64_t rate;
+
+				erec = data_unit_parse(&@$, $4, &rate);
+				xfree($4);
+				if (erec != NULL) {
+					erec_queue(erec, state->msgs);
+					YYERROR;
+				}
+				$$ = quota_stmt_alloc(&@$);
+				$$->quota.bytes	= $3 * rate;
+				$$->quota.used = $5;
+				$$->quota.flags	= $2;
+			}
+			|	LAST USED	NEVER	close_scope_last
+			{
+				$$ = last_stmt_alloc(&@$);
+			}
+			|	LAST USED	time_spec	close_scope_last
+			{
+				$$ = last_stmt_alloc(&@$);
+				$$->last.used = $3;
+				$$->last.set = true;
 			}
 			;
 
@@ -4434,15 +4775,15 @@ ct_obj_type		:	HELPER		{ $$ = NFT_OBJECT_CT_HELPER; }
 			;
 
 ct_cmd_type		:	HELPERS		{ $$ = CMD_OBJ_CT_HELPERS; }
-			|	TIMEOUT		{ $$ = CMD_OBJ_CT_TIMEOUT; }
-			|	EXPECTATION	{ $$ = CMD_OBJ_CT_EXPECT; }
+			|	TIMEOUT		{ $$ = CMD_OBJ_CT_TIMEOUTS; }
+			|	EXPECTATION	{ $$ = CMD_OBJ_CT_EXPECTATIONS; }
 			;
 
-ct_l4protoname		:	TCP	{ $$ = IPPROTO_TCP; }
-			|	UDP	{ $$ = IPPROTO_UDP; }
+ct_l4protoname		:	TCP	close_scope_tcp	{ $$ = IPPROTO_TCP; }
+			|	UDP	close_scope_udp	{ $$ = IPPROTO_UDP; }
 			;
 
-ct_helper_config		:	TYPE	QUOTED_STRING	PROTOCOL	ct_l4protoname	stmt_separator
+ct_helper_config		:	TYPE	QUOTED_STRING	PROTOCOL	ct_l4protoname	stmt_separator	close_scope_type
 			{
 				struct ct_helper *ct;
 				int ret;
@@ -4477,8 +4818,7 @@ timeout_states		:	timeout_state
 			}
 			;
 
-timeout_state		:	STRING	COLON	NUM
-
+timeout_state		:	STRING	COLON	time_spec_or_num_s
 			{
 				struct timeout_state *ts;
 
@@ -4499,7 +4839,7 @@ ct_timeout_config	:	PROTOCOL	ct_l4protoname	stmt_separator
 				ct = &$<obj>0->ct_timeout;
 				ct->l4proto = l4proto;
 			}
-			|	POLICY 	'=' 	'{' 	timeout_states 	'}'	 stmt_separator
+			|	POLICY 	'=' 	'{' 	timeout_states 	'}'	 stmt_separator	close_scope_policy
 			{
 				struct ct_timeout *ct;
 
@@ -4541,34 +4881,25 @@ ct_obj_alloc		:	/* empty */
 			}
 			;
 
-limit_config		:	RATE	limit_mode	NUM	SLASH	time_unit	limit_burst_pkts
+limit_config		:	RATE	limit_mode	limit_rate_pkts	limit_burst_pkts
 			{
 				struct limit *limit;
 
 				limit = &$<obj>0->limit;
-				limit->rate	= $3;
-				limit->unit	= $5;
-				limit->burst	= $6;
+				limit->rate	= $3.rate;
+				limit->unit	= $3.unit;
+				limit->burst	= $4;
 				limit->type	= NFT_LIMIT_PKTS;
 				limit->flags	= $2;
 			}
-			|	RATE	limit_mode	NUM	STRING	limit_burst_bytes
+			|	RATE	limit_mode	limit_rate_bytes	limit_burst_bytes
 			{
 				struct limit *limit;
-				struct error_record *erec;
-				uint64_t rate, unit;
-
-				erec = rate_parse(&@$, $4, &rate, &unit);
-				xfree($4);
-				if (erec != NULL) {
-					erec_queue(erec, state->msgs);
-					YYERROR;
-				}
 
 				limit = &$<obj>0->limit;
-				limit->rate	= rate * $3;
-				limit->unit	= unit;
-				limit->burst	= $5;
+				limit->rate	= $3.rate;
+				limit->unit	= $3.unit;
+				limit->burst	= $4;
 				limit->type	= NFT_LIMIT_PKT_BYTES;
 				limit->flags	= $2;
 			}
@@ -4708,55 +5039,57 @@ keyword_expr		:	ETHER   close_scope_eth { $$ = symbol_value(&@$, "ether"); }
 			|	IP6	close_scope_ip6 { $$ = symbol_value(&@$, "ip6"); }
 			|	VLAN	close_scope_vlan { $$ = symbol_value(&@$, "vlan"); }
 			|	ARP	close_scope_arp { $$ = symbol_value(&@$, "arp"); }
-			|	DNAT			{ $$ = symbol_value(&@$, "dnat"); }
-			|	SNAT			{ $$ = symbol_value(&@$, "snat"); }
+			|	DNAT	close_scope_nat	{ $$ = symbol_value(&@$, "dnat"); }
+			|	SNAT	close_scope_nat	{ $$ = symbol_value(&@$, "snat"); }
 			|	ECN			{ $$ = symbol_value(&@$, "ecn"); }
-			|	RESET			{ $$ = symbol_value(&@$, "reset"); }
+			|	RESET	close_scope_reset	{ $$ = symbol_value(&@$, "reset"); }
+			|	DESTROY	close_scope_destroy	{ $$ = symbol_value(&@$, "destroy"); }
 			|	ORIGINAL		{ $$ = symbol_value(&@$, "original"); }
 			|	REPLY			{ $$ = symbol_value(&@$, "reply"); }
 			|	LABEL			{ $$ = symbol_value(&@$, "label"); }
+			|	LAST	close_scope_last	{ $$ = symbol_value(&@$, "last"); }
 			;
 
 primary_rhs_expr	:	symbol_expr		{ $$ = $1; }
 			|	integer_expr		{ $$ = $1; }
 			|	boolean_expr		{ $$ = $1; }
 			|	keyword_expr		{ $$ = $1; }
-			|	TCP
+			|	TCP	close_scope_tcp
 			{
 				uint8_t data = IPPROTO_TCP;
 				$$ = constant_expr_alloc(&@$, &inet_protocol_type,
 							 BYTEORDER_HOST_ENDIAN,
 							 sizeof(data) * BITS_PER_BYTE, &data);
 			}
-			|	UDP
+			|	UDP	close_scope_udp
 			{
 				uint8_t data = IPPROTO_UDP;
 				$$ = constant_expr_alloc(&@$, &inet_protocol_type,
 							 BYTEORDER_HOST_ENDIAN,
 							 sizeof(data) * BITS_PER_BYTE, &data);
 			}
-			|	UDPLITE
+			|	UDPLITE	close_scope_udplite
 			{
 				uint8_t data = IPPROTO_UDPLITE;
 				$$ = constant_expr_alloc(&@$, &inet_protocol_type,
 							 BYTEORDER_HOST_ENDIAN,
 							 sizeof(data) * BITS_PER_BYTE, &data);
 			}
-			|	ESP
+			|	ESP	close_scope_esp
 			{
 				uint8_t data = IPPROTO_ESP;
 				$$ = constant_expr_alloc(&@$, &inet_protocol_type,
 							 BYTEORDER_HOST_ENDIAN,
 							 sizeof(data) * BITS_PER_BYTE, &data);
 			}
-			|	AH
+			|	AH	close_scope_ah
 			{
 				uint8_t data = IPPROTO_AH;
 				$$ = constant_expr_alloc(&@$, &inet_protocol_type,
 							 BYTEORDER_HOST_ENDIAN,
 							 sizeof(data) * BITS_PER_BYTE, &data);
 			}
-			|	ICMP
+			|	ICMP	close_scope_icmp
 			{
 				uint8_t data = IPPROTO_ICMP;
 				$$ = constant_expr_alloc(&@$, &inet_protocol_type,
@@ -4770,21 +5103,28 @@ primary_rhs_expr	:	symbol_expr		{ $$ = $1; }
 							 BYTEORDER_HOST_ENDIAN,
 							 sizeof(data) * BITS_PER_BYTE, &data);
 			}
-			|	ICMP6
+			|	ICMP6	close_scope_icmp
 			{
 				uint8_t data = IPPROTO_ICMPV6;
 				$$ = constant_expr_alloc(&@$, &inet_protocol_type,
 							 BYTEORDER_HOST_ENDIAN,
 							 sizeof(data) * BITS_PER_BYTE, &data);
 			}
-			|	COMP
+			|	GRE close_scope_gre
+			{
+				uint8_t data = IPPROTO_GRE;
+				$$ = constant_expr_alloc(&@$, &inet_protocol_type,
+							 BYTEORDER_HOST_ENDIAN,
+							 sizeof(data) * BITS_PER_BYTE, &data);
+			}
+			|	COMP	close_scope_comp
 			{
 				uint8_t data = IPPROTO_COMP;
 				$$ = constant_expr_alloc(&@$, &inet_protocol_type,
 							 BYTEORDER_HOST_ENDIAN,
 							 sizeof(data) * BITS_PER_BYTE, &data);
 			}
-			|	DCCP
+			|	DCCP	close_scope_dccp
 			{
 				uint8_t data = IPPROTO_DCCP;
 				$$ = constant_expr_alloc(&@$, &inet_protocol_type,
@@ -4798,7 +5138,7 @@ primary_rhs_expr	:	symbol_expr		{ $$ = $1; }
 							 BYTEORDER_HOST_ENDIAN,
 							 sizeof(data) * BITS_PER_BYTE, &data);
 			}
-			|	REDIRECT
+			|	REDIRECT	close_scope_nat
 			{
 				uint8_t data = ICMP_REDIRECT;
 				$$ = constant_expr_alloc(&@$, &icmp_type_type,
@@ -4854,7 +5194,7 @@ chain_expr		:	variable_expr
 			}
 			;
 
-meta_expr		:	META	meta_key
+meta_expr		:	META	meta_key	close_scope_meta
 			{
 				$$ = meta_expr_alloc(&@$, $2);
 			}
@@ -4862,7 +5202,7 @@ meta_expr		:	META	meta_key
 			{
 				$$ = meta_expr_alloc(&@$, $1);
 			}
-			|	META	STRING
+			|	META	STRING	close_scope_meta
 			{
 				struct error_record *erec;
 				unsigned int key;
@@ -4915,7 +5255,7 @@ meta_key_unqualified	:	MARK		{ $$ = NFT_META_MARK; }
 			|       HOUR		{ $$ = NFT_META_TIME_HOUR; }
 			;
 
-meta_stmt		:	META	meta_key	SET	stmt_expr
+meta_stmt		:	META	meta_key	SET	stmt_expr	close_scope_meta
 			{
 				switch ($2) {
 				case NFT_META_SECMARK:
@@ -4939,7 +5279,7 @@ meta_stmt		:	META	meta_key	SET	stmt_expr
 			{
 				$$ = meta_stmt_alloc(&@$, $1, $3);
 			}
-			|	META	STRING	SET	stmt_expr
+			|	META	STRING	SET	stmt_expr	close_scope_meta
 			{
 				struct error_record *erec;
 				unsigned int key;
@@ -4957,11 +5297,11 @@ meta_stmt		:	META	meta_key	SET	stmt_expr
 			{
 				$$ = notrack_stmt_alloc(&@$);
 			}
-			|	FLOW	OFFLOAD	AT string
+			|	FLOW	OFFLOAD	AT string	close_scope_at
 			{
 				$$ = flow_offload_stmt_alloc(&@$, $4);
 			}
-			|	FLOW	ADD	AT string
+			|	FLOW	ADD	AT string	close_scope_at
 			{
 				$$ = flow_offload_stmt_alloc(&@$, $4);
 			}
@@ -5228,13 +5568,17 @@ payload_expr		:	payload_raw_expr
 			|	comp_hdr_expr
 			|	udp_hdr_expr
 			|	udplite_hdr_expr
-			|	tcp_hdr_expr
+			|	tcp_hdr_expr	close_scope_tcp
 			|	dccp_hdr_expr
 			|	sctp_hdr_expr
 			|	th_hdr_expr
+			|	vxlan_hdr_expr
+			|	geneve_hdr_expr
+			|	gre_hdr_expr
+			|	gretap_hdr_expr
 			;
 
-payload_raw_expr	:	AT	payload_base_spec	COMMA	NUM	COMMA	NUM
+payload_raw_expr	:	AT	payload_base_spec	COMMA	NUM	COMMA	NUM	close_scope_at
 			{
 				$$ = payload_expr_alloc(&@$, NULL, 0);
 				payload_init_raw($$, $2, $4, $6);
@@ -5245,7 +5589,18 @@ payload_raw_expr	:	AT	payload_base_spec	COMMA	NUM	COMMA	NUM
 
 payload_base_spec	:	LL_HDR		{ $$ = PROTO_BASE_LL_HDR; }
 			|	NETWORK_HDR	{ $$ = PROTO_BASE_NETWORK_HDR; }
-			|	TRANSPORT_HDR	{ $$ = PROTO_BASE_TRANSPORT_HDR; }
+			|	TRANSPORT_HDR	close_scope_th	{ $$ = PROTO_BASE_TRANSPORT_HDR; }
+			|	STRING
+			{
+				if (!strcmp($1, "ih")) {
+					$$ = PROTO_BASE_INNER_HDR;
+				} else {
+					erec_queue(error(&@1, "unknown raw payload base"), state->msgs);
+					xfree($1);
+					YYERROR;
+				}
+				xfree($1);
+			}
 			;
 
 eth_hdr_expr		:	ETHER	eth_hdr_field	close_scope_eth
@@ -5256,7 +5611,7 @@ eth_hdr_expr		:	ETHER	eth_hdr_field	close_scope_eth
 
 eth_hdr_field		:	SADDR		{ $$ = ETHHDR_SADDR; }
 			|	DADDR		{ $$ = ETHHDR_DADDR; }
-			|	TYPE		{ $$ = ETHHDR_TYPE; }
+			|	TYPE		close_scope_type	{ $$ = ETHHDR_TYPE; }
 			;
 
 vlan_hdr_expr		:	VLAN	vlan_hdr_field	close_scope_vlan
@@ -5269,7 +5624,7 @@ vlan_hdr_field		:	ID		{ $$ = VLANHDR_VID; }
 			|	CFI		{ $$ = VLANHDR_CFI; }
 			|	DEI		{ $$ = VLANHDR_DEI; }
 			|	PCP		{ $$ = VLANHDR_PCP; }
-			|	TYPE		{ $$ = VLANHDR_TYPE; }
+			|	TYPE		close_scope_type	{ $$ = VLANHDR_TYPE; }
 			;
 
 arp_hdr_expr		:	ARP	arp_hdr_field	close_scope_arp
@@ -5295,11 +5650,15 @@ ip_hdr_expr		:	IP	ip_hdr_field	close_scope_ip
 			}
 			|	IP	OPTION	ip_option_type ip_option_field	close_scope_ip
 			{
-				$$ = ipopt_expr_alloc(&@$, $3, $4, 0);
+				$$ = ipopt_expr_alloc(&@$, $3, $4);
+				if (!$$) {
+					erec_queue(error(&@1, "unknown ip option type/field"), state->msgs);
+					YYERROR;
+				}
 			}
 			|	IP	OPTION	ip_option_type close_scope_ip
 			{
-				$$ = ipopt_expr_alloc(&@$, $3, IPOPT_FIELD_TYPE, 0);
+				$$ = ipopt_expr_alloc(&@$, $3, IPOPT_FIELD_TYPE);
 				$$->exthdr.flags = NFT_EXTHDR_F_PRESENT;
 			}
 			;
@@ -5324,20 +5683,20 @@ ip_option_type		:	LSRR		{ $$ = IPOPT_LSRR; }
 			|	RA		{ $$ = IPOPT_RA; }
 			;
 
-ip_option_field		:	TYPE		{ $$ = IPOPT_FIELD_TYPE; }
+ip_option_field		:	TYPE		close_scope_type	{ $$ = IPOPT_FIELD_TYPE; }
 			|	LENGTH		{ $$ = IPOPT_FIELD_LENGTH; }
 			|	VALUE		{ $$ = IPOPT_FIELD_VALUE; }
 			|	PTR		{ $$ = IPOPT_FIELD_PTR; }
 			|	ADDR		{ $$ = IPOPT_FIELD_ADDR_0; }
 			;
 
-icmp_hdr_expr		:	ICMP	icmp_hdr_field
+icmp_hdr_expr		:	ICMP	icmp_hdr_field	close_scope_icmp
 			{
 				$$ = payload_expr_alloc(&@$, &proto_icmp, $2);
 			}
 			;
 
-icmp_hdr_field		:	TYPE		{ $$ = ICMPHDR_TYPE; }
+icmp_hdr_field		:	TYPE		close_scope_type	{ $$ = ICMPHDR_TYPE; }
 			|	CODE		{ $$ = ICMPHDR_CODE; }
 			|	CHECKSUM	{ $$ = ICMPHDR_CHECKSUM; }
 			|	ID		{ $$ = ICMPHDR_ID; }
@@ -5346,13 +5705,13 @@ icmp_hdr_field		:	TYPE		{ $$ = ICMPHDR_TYPE; }
 			|	MTU		{ $$ = ICMPHDR_MTU; }
 			;
 
-igmp_hdr_expr		:	IGMP	igmp_hdr_field
+igmp_hdr_expr		:	IGMP	igmp_hdr_field	close_scope_igmp
 			{
 				$$ = payload_expr_alloc(&@$, &proto_igmp, $2);
 			}
 			;
 
-igmp_hdr_field		:	TYPE		{ $$ = IGMPHDR_TYPE; }
+igmp_hdr_field		:	TYPE		close_scope_type	{ $$ = IGMPHDR_TYPE; }
 			|	CHECKSUM	{ $$ = IGMPHDR_CHECKSUM; }
 			|	MRT		{ $$ = IGMPHDR_MRT; }
 			|	GROUP		{ $$ = IGMPHDR_GROUP; }
@@ -5374,13 +5733,13 @@ ip6_hdr_field		:	HDRVERSION	{ $$ = IP6HDR_VERSION; }
 			|	SADDR		{ $$ = IP6HDR_SADDR; }
 			|	DADDR		{ $$ = IP6HDR_DADDR; }
 			;
-icmp6_hdr_expr		:	ICMP6	icmp6_hdr_field
+icmp6_hdr_expr		:	ICMP6	icmp6_hdr_field	close_scope_icmp
 			{
 				$$ = payload_expr_alloc(&@$, &proto_icmp6, $2);
 			}
 			;
 
-icmp6_hdr_field		:	TYPE		{ $$ = ICMP6HDR_TYPE; }
+icmp6_hdr_field		:	TYPE		close_scope_type	{ $$ = ICMP6HDR_TYPE; }
 			|	CODE		{ $$ = ICMP6HDR_CODE; }
 			|	CHECKSUM	{ $$ = ICMP6HDR_CHECKSUM; }
 			|	PPTR		{ $$ = ICMP6HDR_PPTR; }
@@ -5388,9 +5747,11 @@ icmp6_hdr_field		:	TYPE		{ $$ = ICMP6HDR_TYPE; }
 			|	ID		{ $$ = ICMP6HDR_ID; }
 			|	SEQUENCE	{ $$ = ICMP6HDR_SEQ; }
 			|	MAXDELAY	{ $$ = ICMP6HDR_MAXDELAY; }
+			|	TADDR		{ $$ = ICMP6HDR_TADDR; }
+			|	DADDR		{ $$ = ICMP6HDR_DADDR; }
 			;
 
-auth_hdr_expr		:	AH	auth_hdr_field
+auth_hdr_expr		:	AH	auth_hdr_field	close_scope_ah
 			{
 				$$ = payload_expr_alloc(&@$, &proto_ah, $2);
 			}
@@ -5403,7 +5764,7 @@ auth_hdr_field		:	NEXTHDR		{ $$ = AHHDR_NEXTHDR; }
 			|	SEQUENCE	{ $$ = AHHDR_SEQUENCE; }
 			;
 
-esp_hdr_expr		:	ESP	esp_hdr_field
+esp_hdr_expr		:	ESP	esp_hdr_field	close_scope_esp
 			{
 				$$ = payload_expr_alloc(&@$, &proto_esp, $2);
 			}
@@ -5413,7 +5774,7 @@ esp_hdr_field		:	SPI		{ $$ = ESPHDR_SPI; }
 			|	SEQUENCE	{ $$ = ESPHDR_SEQUENCE; }
 			;
 
-comp_hdr_expr		:	COMP	comp_hdr_field
+comp_hdr_expr		:	COMP	comp_hdr_field	close_scope_comp
 			{
 				$$ = payload_expr_alloc(&@$, &proto_comp, $2);
 			}
@@ -5424,7 +5785,7 @@ comp_hdr_field		:	NEXTHDR		{ $$ = COMPHDR_NEXTHDR; }
 			|	CPI		{ $$ = COMPHDR_CPI; }
 			;
 
-udp_hdr_expr		:	UDP	udp_hdr_field
+udp_hdr_expr		:	UDP	udp_hdr_field	close_scope_udp
 			{
 				$$ = payload_expr_alloc(&@$, &proto_udp, $2);
 			}
@@ -5436,7 +5797,7 @@ udp_hdr_field		:	SPORT		{ $$ = UDPHDR_SPORT; }
 			|	CHECKSUM	{ $$ = UDPHDR_CHECKSUM; }
 			;
 
-udplite_hdr_expr	:	UDPLITE	udplite_hdr_field
+udplite_hdr_expr	:	UDPLITE	udplite_hdr_field	close_scope_udplite
 			{
 				$$ = payload_expr_alloc(&@$, &proto_udplite, $2);
 			}
@@ -5452,19 +5813,114 @@ tcp_hdr_expr		:	TCP	tcp_hdr_field
 			{
 				$$ = payload_expr_alloc(&@$, &proto_tcp, $2);
 			}
-			|	TCP	OPTION	tcp_hdr_option_type tcp_hdr_option_field
-			{
-				$$ = tcpopt_expr_alloc(&@$, $3, $4);
-			}
 			|	TCP	OPTION	tcp_hdr_option_type
 			{
 				$$ = tcpopt_expr_alloc(&@$, $3, TCPOPT_COMMON_KIND);
 				$$->exthdr.flags = NFT_EXTHDR_F_PRESENT;
 			}
-			|	TCP	OPTION	AT tcp_hdr_option_type	COMMA	NUM	COMMA	NUM
+			|	TCP	OPTION	tcp_hdr_option_kind_and_field
 			{
-				$$ = tcpopt_expr_alloc(&@$, $4, 0);
-				tcpopt_init_raw($$, $4, $6, $8, 0);
+				$$ = tcpopt_expr_alloc(&@$, $3.kind, $3.field);
+			}
+			|	TCP	OPTION	AT	close_scope_at	tcp_hdr_option_type	COMMA	NUM	COMMA	NUM
+			{
+				$$ = tcpopt_expr_alloc(&@$, $5, 0);
+				tcpopt_init_raw($$, $5, $7, $9, 0);
+			}
+			;
+
+inner_inet_expr		:	ip_hdr_expr
+			|	icmp_hdr_expr
+			|	igmp_hdr_expr
+			|	ip6_hdr_expr
+			|	icmp6_hdr_expr
+			|	auth_hdr_expr
+			|	esp_hdr_expr
+			|	comp_hdr_expr
+			|	udp_hdr_expr
+			|	udplite_hdr_expr
+			|	tcp_hdr_expr	close_scope_tcp
+			|	dccp_hdr_expr
+			|	sctp_hdr_expr
+			|	th_hdr_expr
+			;
+
+inner_eth_expr		:	eth_hdr_expr
+			|	vlan_hdr_expr
+			|	arp_hdr_expr
+			;
+
+inner_expr		:	inner_eth_expr
+			|	inner_inet_expr
+			;
+
+vxlan_hdr_expr		:	VXLAN	vxlan_hdr_field
+			{
+				struct expr *expr;
+
+				expr = payload_expr_alloc(&@$, &proto_vxlan, $2);
+				expr->payload.inner_desc = &proto_vxlan;
+				$$ = expr;
+			}
+			|	VXLAN	inner_expr
+			{
+				$$ = $2;
+				$$->location = @$;
+				$$->payload.inner_desc = &proto_vxlan;
+			}
+			;
+
+vxlan_hdr_field		:	VNI			{ $$ = VXLANHDR_VNI; }
+			|	FLAGS			{ $$ = VXLANHDR_FLAGS; }
+			;
+
+geneve_hdr_expr		:	GENEVE	geneve_hdr_field
+			{
+				struct expr *expr;
+
+				expr = payload_expr_alloc(&@$, &proto_geneve, $2);
+				expr->payload.inner_desc = &proto_geneve;
+				$$ = expr;
+			}
+			|	GENEVE	inner_expr
+			{
+				$$ = $2;
+				$$->location = @$;
+				$$->payload.inner_desc = &proto_geneve;
+			}
+			;
+
+geneve_hdr_field	:	VNI			{ $$ = GNVHDR_VNI; }
+			|	TYPE			{ $$ = GNVHDR_TYPE; }
+			;
+
+gre_hdr_expr		:	GRE	gre_hdr_field	close_scope_gre
+			{
+				$$ = payload_expr_alloc(&@$, &proto_gre, $2);
+			}
+			|	GRE	close_scope_gre inner_inet_expr
+			{
+				$$ = $3;
+				$$->payload.inner_desc = &proto_gre;
+			}
+			;
+
+gre_hdr_field		:	HDRVERSION		{ $$ = GREHDR_VERSION;	}
+			|	FLAGS			{ $$ = GREHDR_FLAGS; }
+			|	PROTOCOL		{ $$ = GREHDR_PROTOCOL; }
+			;
+
+gretap_hdr_expr		:	GRETAP	close_scope_gre inner_expr
+			{
+				$$ = $3;
+				$$->payload.inner_desc = &proto_gretap;
+			}
+			;
+
+optstrip_stmt		:	RESET	TCP	OPTION	tcp_hdr_option_type	close_scope_tcp
+			{
+				$$ = optstrip_stmt_alloc(&@$, tcpopt_expr_alloc(&@$,
+										$4, TCPOPT_COMMON_KIND));
 			}
 			;
 
@@ -5480,19 +5936,57 @@ tcp_hdr_field		:	SPORT		{ $$ = TCPHDR_SPORT; }
 			|	URGPTR		{ $$ = TCPHDR_URGPTR; }
 			;
 
-tcp_hdr_option_type	:	EOL		{ $$ = TCPOPT_KIND_EOL; }
-			|	NOP		{ $$ = TCPOPT_KIND_NOP; }
-			|	MSS  	  	{ $$ = TCPOPT_KIND_MAXSEG; }
-			|	WINDOW		{ $$ = TCPOPT_KIND_WINDOW; }
-			|	SACK_PERM	{ $$ = TCPOPT_KIND_SACK_PERMITTED; }
-			|	SACK		{ $$ = TCPOPT_KIND_SACK; }
+tcp_hdr_option_kind_and_field	:	MSS	tcpopt_field_maxseg
+				{
+					struct tcp_kind_field kind_field = { .kind = TCPOPT_KIND_MAXSEG, .field = $2 };
+					$$ = kind_field;
+				}
+				|	tcp_hdr_option_sack	tcpopt_field_sack
+				{
+					struct tcp_kind_field kind_field = { .kind = $1, .field = $2 };
+					$$ = kind_field;
+				}
+				|	WINDOW	tcpopt_field_window
+				{
+					struct tcp_kind_field kind_field = { .kind = TCPOPT_KIND_WINDOW, .field = $2 };
+					$$ = kind_field;
+				}
+				|	TIMESTAMP	tcpopt_field_tsopt
+				{
+					struct tcp_kind_field kind_field = { .kind = TCPOPT_KIND_TIMESTAMP, .field = $2 };
+					$$ = kind_field;
+				}
+				|	tcp_hdr_option_type	LENGTH
+				{
+					struct tcp_kind_field kind_field = { .kind = $1, .field = TCPOPT_COMMON_LENGTH };
+					$$ = kind_field;
+				}
+				|	MPTCP	tcpopt_field_mptcp
+				{
+					struct tcp_kind_field kind_field = { .kind = TCPOPT_KIND_MPTCP, .field = $2 };
+					$$ = kind_field;
+				}
+				;
+
+tcp_hdr_option_sack	:	SACK		{ $$ = TCPOPT_KIND_SACK; }
 			|	SACK0		{ $$ = TCPOPT_KIND_SACK; }
 			|	SACK1		{ $$ = TCPOPT_KIND_SACK1; }
 			|	SACK2		{ $$ = TCPOPT_KIND_SACK2; }
 			|	SACK3		{ $$ = TCPOPT_KIND_SACK3; }
-			|	ECHO		{ $$ = TCPOPT_KIND_ECHO; }
-			|	TIMESTAMP	{ $$ = TCPOPT_KIND_TIMESTAMP; }
-			|	NUM		{
+			;
+
+tcp_hdr_option_type	:	ECHO			{ $$ = TCPOPT_KIND_ECHO; }
+			|	EOL			{ $$ = TCPOPT_KIND_EOL; }
+			|	FASTOPEN		{ $$ = TCPOPT_KIND_FASTOPEN; }
+			|	MD5SIG			{ $$ = TCPOPT_KIND_MD5SIG; }
+			|	MPTCP			{ $$ = TCPOPT_KIND_MPTCP; }
+			|	MSS			{ $$ = TCPOPT_KIND_MAXSEG; }
+			|	NOP			{ $$ = TCPOPT_KIND_NOP; }
+			|	SACK_PERM		{ $$ = TCPOPT_KIND_SACK_PERMITTED; }
+			|       TIMESTAMP               { $$ = TCPOPT_KIND_TIMESTAMP; }
+			|       WINDOW                  { $$ = TCPOPT_KIND_WINDOW; }
+			|	tcp_hdr_option_sack	{ $$ = $1; }
+			|	NUM			{
 				if ($1 > 255) {
 					erec_queue(error(&@1, "value too large"), state->msgs);
 					YYERROR;
@@ -5501,25 +5995,41 @@ tcp_hdr_option_type	:	EOL		{ $$ = TCPOPT_KIND_EOL; }
 			}
 			;
 
-tcp_hdr_option_field	:	KIND		{ $$ = TCPOPT_COMMON_KIND; }
-			|	LENGTH		{ $$ = TCPOPT_COMMON_LENGTH; }
-			|	SIZE		{ $$ = TCPOPT_MAXSEG_SIZE; }
-			|	COUNT		{ $$ = TCPOPT_WINDOW_COUNT; }
-			|	LEFT		{ $$ = TCPOPT_SACK_LEFT; }
+tcpopt_field_sack	: 	LEFT		{ $$ = TCPOPT_SACK_LEFT; }
 			|	RIGHT		{ $$ = TCPOPT_SACK_RIGHT; }
-			|	TSVAL		{ $$ = TCPOPT_TS_TSVAL; }
+			;
+
+tcpopt_field_window	:	COUNT           { $$ = TCPOPT_WINDOW_COUNT; }
+			;
+
+tcpopt_field_tsopt	:	TSVAL           { $$ = TCPOPT_TS_TSVAL; }
 			|	TSECR		{ $$ = TCPOPT_TS_TSECR; }
 			;
 
-dccp_hdr_expr		:	DCCP	dccp_hdr_field
+tcpopt_field_maxseg	:	SIZE		{ $$ = TCPOPT_MAXSEG_SIZE; }
+			;
+
+tcpopt_field_mptcp	:	SUBTYPE		{ $$ = TCPOPT_MPTCP_SUBTYPE; }
+			;
+
+dccp_hdr_expr		:	DCCP	dccp_hdr_field	close_scope_dccp
 			{
 				$$ = payload_expr_alloc(&@$, &proto_dccp, $2);
+			}
+			|	DCCP	OPTION		NUM	close_scope_dccp
+			{
+				if ($3 > DCCPOPT_TYPE_MAX) {
+					erec_queue(error(&@1, "value too large"),
+						   state->msgs);
+					YYERROR;
+				}
+				$$ = dccpopt_expr_alloc(&@$, $3);
 			}
 			;
 
 dccp_hdr_field		:	SPORT		{ $$ = DCCPHDR_SPORT; }
 			|	DPORT		{ $$ = DCCPHDR_DPORT; }
-			|	TYPE		{ $$ = DCCPHDR_TYPE; }
+			|	TYPE		close_scope_type	{ $$ = DCCPHDR_TYPE; }
 			;
 
 sctp_chunk_type		:	DATA		{ $$ = SCTP_CHUNK_TYPE_DATA; }
@@ -5542,7 +6052,7 @@ sctp_chunk_type		:	DATA		{ $$ = SCTP_CHUNK_TYPE_DATA; }
 			|	ASCONF		{ $$ = SCTP_CHUNK_TYPE_ASCONF; }
 			;
 
-sctp_chunk_common_field	:	TYPE	{ $$ = SCTP_CHUNK_COMMON_TYPE; }
+sctp_chunk_common_field	:	TYPE	close_scope_type	{ $$ = SCTP_CHUNK_COMMON_TYPE; }
 			|	FLAGS	{ $$ = SCTP_CHUNK_COMMON_FLAGS; }
 			|	LENGTH	{ $$ = SCTP_CHUNK_COMMON_LENGTH; }
 			;
@@ -5639,7 +6149,7 @@ sctp_hdr_field		:	SPORT		{ $$ = SCTPHDR_SPORT; }
 			|	CHECKSUM	{ $$ = SCTPHDR_CHECKSUM; }
 			;
 
-th_hdr_expr		:	TRANSPORT_HDR 	th_hdr_field
+th_hdr_expr		:	TRANSPORT_HDR	th_hdr_field	close_scope_th
 			{
 				$$ = payload_expr_alloc(&@$, &proto_th, $2);
 				if ($$)
@@ -5661,7 +6171,7 @@ exthdr_expr		:	hbh_hdr_expr
 			|	mh_hdr_expr
 			;
 
-hbh_hdr_expr		:	HBH	hbh_hdr_field
+hbh_hdr_expr		:	HBH	hbh_hdr_field	close_scope_hbh
 			{
 				$$ = exthdr_expr_alloc(&@$, &exthdr_hbh, $2);
 			}
@@ -5679,11 +6189,11 @@ rt_hdr_expr		:	RT	rt_hdr_field	close_scope_rt
 
 rt_hdr_field		:	NEXTHDR		{ $$ = RTHDR_NEXTHDR; }
 			|	HDRLENGTH	{ $$ = RTHDR_HDRLENGTH; }
-			|	TYPE		{ $$ = RTHDR_TYPE; }
+			|	TYPE		close_scope_type	{ $$ = RTHDR_TYPE; }
 			|	SEG_LEFT	{ $$ = RTHDR_SEG_LEFT; }
 			;
 
-rt0_hdr_expr		:	RT0	rt0_hdr_field
+rt0_hdr_expr		:	RT0	rt0_hdr_field	close_scope_rt
 			{
 				$$ = exthdr_expr_alloc(&@$, &exthdr_rt0, $2);
 			}
@@ -5695,7 +6205,7 @@ rt0_hdr_field		:	ADDR	'['	NUM	']'
 			}
 			;
 
-rt2_hdr_expr		:	RT2	rt2_hdr_field
+rt2_hdr_expr		:	RT2	rt2_hdr_field	close_scope_rt
 			{
 				$$ = exthdr_expr_alloc(&@$, &exthdr_rt2, $2);
 			}
@@ -5704,7 +6214,7 @@ rt2_hdr_expr		:	RT2	rt2_hdr_field
 rt2_hdr_field		:	ADDR		{ $$ = RT2HDR_ADDR; }
 			;
 
-rt4_hdr_expr		:	RT4	rt4_hdr_field
+rt4_hdr_expr		:	RT4	rt4_hdr_field	close_scope_rt
 			{
 				$$ = exthdr_expr_alloc(&@$, &exthdr_rt4, $2);
 			}
@@ -5719,7 +6229,7 @@ rt4_hdr_field		:	LAST_ENT	{ $$ = RT4HDR_LASTENT; }
 			}
 			;
 
-frag_hdr_expr		:	FRAG	frag_hdr_field
+frag_hdr_expr		:	FRAG	frag_hdr_field	close_scope_frag
 			{
 				$$ = exthdr_expr_alloc(&@$, &exthdr_frag, $2);
 			}
@@ -5733,7 +6243,7 @@ frag_hdr_field		:	NEXTHDR		{ $$ = FRAGHDR_NEXTHDR; }
 			|	ID		{ $$ = FRAGHDR_ID; }
 			;
 
-dst_hdr_expr		:	DST	dst_hdr_field
+dst_hdr_expr		:	DST	dst_hdr_field	close_scope_dst
 			{
 				$$ = exthdr_expr_alloc(&@$, &exthdr_dst, $2);
 			}
@@ -5743,7 +6253,7 @@ dst_hdr_field		:	NEXTHDR		{ $$ = DSTHDR_NEXTHDR; }
 			|	HDRLENGTH	{ $$ = DSTHDR_HDRLENGTH; }
 			;
 
-mh_hdr_expr		:	MH	mh_hdr_field
+mh_hdr_expr		:	MH	mh_hdr_field	close_scope_mh
 			{
 				$$ = exthdr_expr_alloc(&@$, &exthdr_mh, $2);
 			}
@@ -5751,7 +6261,7 @@ mh_hdr_expr		:	MH	mh_hdr_field
 
 mh_hdr_field		:	NEXTHDR		{ $$ = MHHDR_NEXTHDR; }
 			|	HDRLENGTH	{ $$ = MHHDR_HDRLENGTH; }
-			|	TYPE		{ $$ = MHHDR_TYPE; }
+			|	TYPE		close_scope_type	{ $$ = MHHDR_TYPE; }
 			|	RESERVED	{ $$ = MHHDR_RESERVED; }
 			|	CHECKSUM	{ $$ = MHHDR_CHECKSUM; }
 			;
@@ -5763,18 +6273,18 @@ exthdr_exists_expr	:	EXTHDR	exthdr_key
 				desc = exthdr_find_proto($2);
 
 				/* Assume that NEXTHDR template is always
-				 * the fist one in list of templates.
+				 * the first one in list of templates.
 				 */
 				$$ = exthdr_expr_alloc(&@$, desc, 1);
 				$$->exthdr.flags = NFT_EXTHDR_F_PRESENT;
 			}
 			;
 
-exthdr_key		:	HBH	{ $$ = IPPROTO_HOPOPTS; }
+exthdr_key		:	HBH	close_scope_hbh	{ $$ = IPPROTO_HOPOPTS; }
 			|	RT	close_scope_rt	{ $$ = IPPROTO_ROUTING; }
-			|	FRAG	{ $$ = IPPROTO_FRAGMENT; }
-			|	DST	{ $$ = IPPROTO_DSTOPTS; }
-			|	MH	{ $$ = IPPROTO_MH; }
+			|	FRAG	close_scope_frag	{ $$ = IPPROTO_FRAGMENT; }
+			|	DST	close_scope_dst	{ $$ = IPPROTO_DSTOPTS; }
+			|	MH	close_scope_mh	{ $$ = IPPROTO_MH; }
 			;
 
 %%

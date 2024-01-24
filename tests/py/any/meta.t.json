@@ -662,6 +662,26 @@
     }
 ]
 
+# meta mark 0xffffff00/24
+[
+    {
+        "match": {
+            "left": {
+                "meta": {
+                    "key": "mark"
+                }
+            },
+            "op": "==",
+            "right": {
+                "prefix": {
+                    "addr": 4294967040,
+                    "len": 24
+                }
+            }
+        }
+    }
+]
+
 # meta mark or 0x03 == 0x01
 [
     {
@@ -2541,6 +2561,42 @@
     }
 ]
 
+# meta time < "2022-07-01 11:00:00" accept
+[
+    {
+        "match": {
+            "left": {
+                "meta": {
+                    "key": "time"
+                }
+            },
+            "op": "<",
+            "right": "2022-07-01 11:00:00"
+        }
+    },
+    {
+        "accept": null
+    }
+]
+
+# meta time > "2022-07-01 11:00:00" accept
+[
+    {
+        "match": {
+            "left": {
+                "meta": {
+                    "key": "time"
+                }
+            },
+            "op": ">",
+            "right": "2022-07-01 11:00:00"
+        }
+    },
+    {
+        "accept": null
+    }
+]
+
 # meta day "Saturday" drop
 [
     {
@@ -2664,5 +2720,41 @@
     },
     {
         "drop": null
+    }
+]
+
+# time < "2022-07-01 11:00:00" accept
+[
+    {
+        "match": {
+            "left": {
+                "meta": {
+                    "key": "time"
+                }
+            },
+            "op": "<",
+            "right": "2022-07-01 11:00:00"
+        }
+    },
+    {
+        "accept": null
+    }
+]
+
+# time > "2022-07-01 11:00:00" accept
+[
+    {
+        "match": {
+            "left": {
+                "meta": {
+                    "key": "time"
+                }
+            },
+            "op": ">",
+            "right": "2022-07-01 11:00:00"
+        }
+    },
+    {
+        "accept": null
     }
 ]

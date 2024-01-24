@@ -11,7 +11,7 @@ The verdict statement alters control flow in the ruleset and issues policy decis
 [horizontal]
 *accept*:: Terminate ruleset evaluation and accept the packet.
 The packet can still be dropped later by another hook, for instance accept
-in the forward hook still allows to drop the packet later in the postrouting hook,
+in the forward hook still allows one to drop the packet later in the postrouting hook,
 or another forward base chain that has a higher priority number and is evaluated
 afterwards in the processing pipeline.
 *drop*:: Terminate ruleset evaluation and drop the packet.
@@ -71,13 +71,20 @@ EXTENSION HEADER STATEMENT
 
 The extension header statement alters packet content in variable-sized headers.
 This can currently be used to alter the TCP Maximum segment size of packets,
-similar to TCPMSS.
+similar to the TCPMSS target in iptables.
 
 .change tcp mss
 ---------------
 tcp flags syn tcp option maxseg size set 1360
 # set a size based on route information:
 tcp flags syn tcp option maxseg size set rt mtu
+---------------
+
+You can also remove tcp options via reset keyword.
+
+.remove tcp option
+---------------
+tcp flags syn reset tcp option sack-perm
 ---------------
 
 LOG STATEMENT
@@ -93,10 +100,11 @@ packets, such as header fields, via the kernel log (where it can be read with
 dmesg(1) or read in the syslog).
 
 In the second form of invocation (if 'nflog_group' is specified), the Linux
-kernel will pass the packet to nfnetlink_log which will multicast the packet
-through a netlink socket to the specified multicast group. One or more userspace
-processes may subscribe to the group to receive the packets, see
-libnetfilter_queue documentation for details.
+kernel will pass the packet to nfnetlink_log which will send the log through a
+netlink socket to the specified group. One userspace process may subscribe to
+the group to receive the logs, see man(8) ulogd for the Netfilter userspace log
+daemon and libnetfilter_log documentation for details in case you would like to
+develop a custom program to digest your logs.
 
 In the third form of invocation (if level audit is specified), the Linux
 kernel writes a message into the audit buffer suitably formatted for reading
@@ -270,7 +278,7 @@ ct event set new,related,destroy
 
 NOTRACK STATEMENT
 ~~~~~~~~~~~~~~~~~
-The notrack statement allows to disable connection tracking for certain
+The notrack statement allows one to disable connection tracking for certain
 packets.
 
 [verse]
@@ -288,7 +296,7 @@ A meta statement sets the value of a meta expression. The existing meta fields
 are: priority, mark, pkttype, nftrace. +
 
 [verse]
-*meta* {*mark* | *priority* | *pkttype* | *nftrace*} *set* 'value'
+*meta* {*mark* | *priority* | *pkttype* | *nftrace* | *broute*} *set* 'value'
 
 A meta statement sets meta data associated with a packet. +
 
@@ -308,6 +316,9 @@ pkt_type
 |nftrace |
 ruleset packet tracing on/off. Use *monitor trace* command to watch traces|
 0, 1
+|broute |
+broute on/off. packets are routed instead of being bridged|
+0, 1
 |==========================
 
 LIMIT STATEMENT
@@ -324,8 +335,13 @@ ____
 A limit statement matches at a limited rate using a token bucket filter. A rule
 using this statement will match until this limit is reached. It can be used in
 combination with the log statement to give limited logging. The optional
-*over* keyword makes it match over the specified rate. Default *burst* is 5.
-if you specify *burst*, it must be non-zero value.
+*over* keyword makes it match over the specified rate.
+
+The *burst* value influences the bucket size, i.e. jitter tolerance. With
+packet-based *limit*, the bucket holds exactly *burst* packets, by default
+five. If you specify packet *burst*, it must be a non-zero value. With
+byte-based *limit*, the bucket's minimum size is the given rate's byte value
+and the *burst* value adds to that, by default zero bytes.
 
 .limit statement values
 [options="header"]
@@ -343,8 +359,8 @@ NAT STATEMENTS
 ~~~~~~~~~~~~~~
 [verse]
 ____
-*snat* [[*ip* | *ip6*] *to*] 'ADDR_SPEC' [*:*'PORT_SPEC'] ['FLAGS']
-*dnat* [[*ip* | *ip6*] *to*] 'ADDR_SPEC' [*:*'PORT_SPEC'] ['FLAGS']
+*snat* [[*ip* | *ip6*] [ *prefix* ] *to*] 'ADDR_SPEC' [*:*'PORT_SPEC'] ['FLAGS']
+*dnat* [[*ip* | *ip6*] [ *prefix* ] *to*] 'ADDR_SPEC' [*:*'PORT_SPEC'] ['FLAGS']
 *masquerade* [*to :*'PORT_SPEC'] ['FLAGS']
 *redirect* [*to :*'PORT_SPEC'] ['FLAGS']
 
@@ -382,6 +398,9 @@ Before kernel 4.18 nat statements require both prerouting and postrouting base c
 to be present since otherwise packets on the return path won't be seen by
 netfilter and therefore no reverse translation will take place.
 
+The optional *prefix* keyword allows to map to map *n* source addresses to *n*
+destination addresses.  See 'Advanced NAT examples' below.
+
 .NAT statement values
 [options="header"]
 |==================
@@ -392,7 +411,7 @@ You may specify a mapping to relate a list of tuples composed of arbitrary
 expression key with address value. |
 ipv4_addr, ipv6_addr, e.g. abcd::1234, or you can use a mapping, e.g. meta mark map { 10 : 192.168.1.2, 20 : 192.168.1.3 }
 |port|
-Specifies that the source/destination address of the packet should be modified. |
+Specifies that the source/destination port of the packet should be modified. |
 port number (16 bit)
 |===============================
 
@@ -438,6 +457,52 @@ add rule inet nat prerouting dnat ip to 10.0.2.99
 add rule inet nat prerouting dnat ip6 to fe80::dead
 # this masquerades both ipv4 and ipv6:
 add rule inet nat postrouting meta oif ppp0 masquerade
+
+------------------------
+
+.Advanced NAT examples
+----------------------
+
+# map prefixes in one network to that of another, e.g. 10.141.11.4 is mangled to 192.168.2.4,
+# 10.141.11.5 is mangled to 192.168.2.5 and so on.
+add rule nat postrouting snat ip prefix to ip saddr map { 10.141.11.0/24 : 192.168.2.0/24 }
+
+# map a source address, source port combination to a pool of destination addresses and ports:
+add rule nat postrouting dnat to ip saddr . tcp dport map { 192.168.1.2 . 80 : 10.141.10.2-10.141.10.5 . 8888-8999 }
+
+# The above example generates the following NAT expression:
+#
+# [ nat dnat ip addr_min reg 1 addr_max reg 10 proto_min reg 9 proto_max reg 11 ]
+#
+# which expects to obtain the following tuple:
+# IP address (min), source port (min), IP address (max), source port (max)
+# to be obtained from the map. The given addresses and ports are inclusive.
+
+# This also works with named maps and in combination with both concatenations and ranges:
+table ip nat {
+	map ipportmap {
+		typeof ip saddr : interval ip daddr . tcp dport
+		flags interval
+		elements = { 192.168.1.2 : 10.141.10.1-10.141.10.3 . 8888-8999, 192.168.2.0/24 : 10.141.11.5-10.141.11.20 . 8888-8999 }
+	}
+
+	chain prerouting {
+		type nat hook prerouting priority dstnat; policy accept;
+		ip protocol tcp dnat ip to ip saddr map @ipportmap
+	}
+}
+
+@ipportmap maps network prefixes to a range of hosts and ports.
+The new destination is taken from the range provided by the map element.
+Same for the destination port.
+
+Note the use of the "interval" keyword in the typeof description.
+This is required so nftables knows that it has to ask for twice the
+amount of storage for each key-value pair in the map.
+
+": ipv4_addr . inet_service" would allow associating one address and one port
+with each key.  But for this case, for each key, two addresses and two ports
+(The minimum and maximum values for both) have to be stored.
 
 ------------------------
 
@@ -589,8 +654,8 @@ for details.
 
 [verse]
 ____
-*queue* [*flags* 'QUEUE_FLAGS'] [*num* 'queue_number']
-*queue* [*flags* 'QUEUE_FLAGS'] [*num* 'queue_number_from' - 'queue_number_to']
+*queue* [*flags* 'QUEUE_FLAGS'] [*to* 'queue_number']
+*queue* [*flags* 'QUEUE_FLAGS'] [*to* 'queue_number_from' - 'queue_number_to']
 *queue* [*flags* 'QUEUE_FLAGS'] [*to* 'QUEUE_EXPRESSION' ]
 
 'QUEUE_FLAGS' := 'QUEUE_FLAG' [*,* 'QUEUE_FLAGS']
@@ -600,7 +665,7 @@ ____
 
 QUEUE_EXPRESSION can be used to compute a queue number
 at run-time with the hash or numgen expressions. It also
-allows to use the map statement to assign fixed queue numbers
+allows one to use the map statement to assign fixed queue numbers
 based on external inputs such as the source ip address or interface names.
 
 .queue statement values
@@ -657,7 +722,7 @@ string
 ip filter forward dup to 10.2.3.4 device "eth0"
 
 # copy raw frame to another interface
-netdetv ingress dup to "eth0"
+netdev ingress dup to "eth0"
 dup to "eth0"
 
 # combine with map dst addr to gateways
@@ -667,10 +732,27 @@ dup to ip daddr map { 192.168.7.1 : "eth0", 192.168.7.2 : "eth1" }
 FWD STATEMENT
 ~~~~~~~~~~~~~
 The fwd statement is used to redirect a raw packet to another interface. It is
-only available in the netdev family ingress hook. It is similar to the dup
-statement except that no copy is made.
+only available in the netdev family ingress and egress hooks. It is similar to
+the dup statement except that no copy is made.
 
+You can also specify the address of the next hop and the device to forward the
+packet to. This updates the source and destination MAC address of the packet by
+transmitting it through the neighboring layer. This also decrements the ttl
+field of the IP packet. This provides a way to effectively bypass the classical
+forwarding path, thus skipping the fib (forwarding information base) lookup.
+
+[verse]
 *fwd to* 'device'
+*fwd* [*ip* | *ip6*] *to* 'address' *device* 'device'
+
+.Using the fwd statement
+------------------------
+# redirect raw packet to device
+netdev ingress fwd to "eth0"
+
+# forward packet to next hop 192.168.200.1 via eth0 device
+netdev ingress ether saddr set fwd ip to 192.168.200.1 device "eth0"
+-----------------------------------
 
 SET STATEMENT
 ~~~~~~~~~~~~~
@@ -685,6 +767,10 @@ memory exhaustion), and their elements should have a timeout (so their number
 will not grow indefinitely) either from the set definition or from the statement
 that adds or updates them. The set statement can be used to e.g. create dynamic
 blacklists.
+
+Dynamic updates are also supported with maps. In this case, the *add* or
+*update* rule needs to provide both the key and the data element (value),
+separated via ':'.
 
 [verse]
 {*add* | *update*} *@*'setname' *{* 'expression' [*timeout* 'timeout'] [*comment* 'string'] *}*
@@ -770,3 +856,20 @@ ____
 # jump to different chains depending on layer 4 protocol type:
 nft add rule ip filter input ip protocol vmap { tcp : jump tcp-chain, udp : jump udp-chain , icmp : jump icmp-chain }
 ------------------------
+
+XT STATEMENT
+~~~~~~~~~~~~
+This represents an xt statement from xtables compat interface. It is a
+fallback if translation is not available or not complete.
+
+[verse]
+____
+*xt* 'TYPE' 'NAME'
+
+'TYPE' := *match* | *target* | *watcher*
+____
+
+Seeing this means the ruleset (or parts of it) were created by *iptables-nft*
+and one should use that to manage it.
+
+*BEWARE:* nftables won't restore these statements.

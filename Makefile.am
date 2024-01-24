@@ -3,10 +3,9 @@ ACLOCAL_AMFLAGS	= -I m4
 SUBDIRS = 	src	\
 		include	\
 		files	\
-		doc
-if HAVE_PYTHON
-SUBDIRS += py
-endif
+		doc	\
+		examples\
+		py
 
 EXTRA_DIST =	tests	\
 		files

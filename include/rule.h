@@ -1,13 +1,11 @@
 #ifndef NFTABLES_RULE_H
 #define NFTABLES_RULE_H
 
-#include <stdint.h>
 #include <nftables.h>
 #include <list.h>
 #include <netinet/in.h>
 #include <libnftnl/object.h>	/* For NFTNL_CTTIMEOUT_ARRAY_MAX. */
 #include <linux/netfilter/nf_tables.h>
-#include <string.h>
 #include <cache.h>
 
 /**
@@ -169,6 +167,7 @@ struct table {
 	unsigned int		refcnt;
 	uint32_t		owner;
 	const char		*comment;
+	bool			has_xt_stmts;
 };
 
 extern struct table *table_alloc(void);
@@ -260,7 +259,7 @@ struct chain {
 extern int std_prio_lookup(const char *std_prio_name, int family, int hook);
 extern const char *chain_type_name_lookup(const char *name);
 extern const char *chain_hookname_lookup(const char *name);
-extern struct chain *chain_alloc(const char *name);
+extern struct chain *chain_alloc(void);
 extern struct chain *chain_get(struct chain *chain);
 extern void chain_free(struct chain *chain);
 extern struct chain *chain_lookup_fuzzy(const struct handle *h,
@@ -311,7 +310,6 @@ void rule_stmt_append(struct rule *rule, struct stmt *stmt);
 void rule_stmt_insert_at(struct rule *rule, struct stmt *nstmt,
 			 struct stmt *stmt);
 
-
 /**
  * struct set - nftables set
  *
@@ -325,6 +323,7 @@ void rule_stmt_insert_at(struct rule *rule, struct stmt *nstmt,
  * @key:	key expression (data type, length))
  * @data:	mapping data expression
  * @objtype:	mapping object type
+ * @existing_set: reference to existing set in the kernel
  * @init:	initializer
  * @rg_cache:	cached range element (left)
  * @policy:	set mechanism policy
@@ -346,6 +345,7 @@ struct set {
 	struct expr		*key;
 	struct expr		*data;
 	uint32_t		objtype;
+	struct set		*existing_set;
 	struct expr		*init;
 	struct expr		*rg_cache;
 	uint32_t		policy;
@@ -517,7 +517,7 @@ struct obj *obj_lookup_fuzzy(const char *obj_name,
 void obj_print(const struct obj *n, struct output_ctx *octx);
 void obj_print_plain(const struct obj *obj, struct output_ctx *octx);
 const char *obj_type_name(uint32_t type);
-uint32_t obj_type_to_cmd(uint32_t type);
+enum cmd_obj obj_type_to_cmd(uint32_t type);
 
 struct flowtable {
 	struct list_head	list;
@@ -561,6 +561,7 @@ void flowtable_print(const struct flowtable *n, struct output_ctx *octx);
  * @CMD_EXPORT:		export the ruleset in a given format
  * @CMD_MONITOR:	event listener
  * @CMD_DESCRIBE:	describe an expression
+ * @CMD_DESTROY:	destroy object
  */
 enum cmd_ops {
 	CMD_INVALID,
@@ -578,6 +579,7 @@ enum cmd_ops {
 	CMD_EXPORT,
 	CMD_MONITOR,
 	CMD_DESCRIBE,
+	CMD_DESTROY,
 };
 
 /**
@@ -618,6 +620,7 @@ enum cmd_obj {
 	CMD_OBJ_SETELEMS,
 	CMD_OBJ_SETS,
 	CMD_OBJ_RULE,
+	CMD_OBJ_RULES,
 	CMD_OBJ_CHAIN,
 	CMD_OBJ_CHAINS,
 	CMD_OBJ_TABLE,
@@ -640,9 +643,11 @@ enum cmd_obj {
 	CMD_OBJ_FLOWTABLE,
 	CMD_OBJ_FLOWTABLES,
 	CMD_OBJ_CT_TIMEOUT,
+	CMD_OBJ_CT_TIMEOUTS,
 	CMD_OBJ_SECMARK,
 	CMD_OBJ_SECMARKS,
 	CMD_OBJ_CT_EXPECT,
+	CMD_OBJ_CT_EXPECTATIONS,
 	CMD_OBJ_SYNPROXY,
 	CMD_OBJ_SYNPROXYS,
 	CMD_OBJ_HOOKS,
@@ -680,6 +685,11 @@ void monitor_free(struct monitor *m);
 
 #define NFT_NLATTR_LOC_MAX 32
 
+struct nlerr_loc {
+	uint16_t		offset;
+	const struct location	*location;
+};
+
 /**
  * struct cmd - command statement
  *
@@ -699,6 +709,7 @@ struct cmd {
 	enum cmd_obj		obj;
 	struct handle		handle;
 	uint32_t		seqnum;
+	struct list_head	collapse_list;
 	union {
 		void		*data;
 		struct expr	*expr;
@@ -715,24 +726,19 @@ struct cmd {
 		struct markup	*markup;
 		struct obj	*object;
 	};
-	struct {
-		uint16_t		offset;
-		const struct location	*location;
-	} attr[NFT_NLATTR_LOC_MAX];
-	int			num_attrs;
+	struct nlerr_loc	*attr;
+	uint32_t		attr_array_len;
+	uint32_t		num_attrs;
 	const void		*arg;
 };
 
 extern struct cmd *cmd_alloc(enum cmd_ops op, enum cmd_obj obj,
 			     const struct handle *h, const struct location *loc,
 			     void *data);
-extern void nft_cmd_expand(struct cmd *cmd);
 extern struct cmd *cmd_alloc_obj_ct(enum cmd_ops op, int type,
 				    const struct handle *h,
 				    const struct location *loc, struct obj *obj);
 extern void cmd_free(struct cmd *cmd);
-
-void cmd_add_loc(struct cmd *cmd, uint16_t offset, const struct location *loc);
 
 #include <payload.h>
 #include <expression.h>
@@ -760,8 +766,10 @@ struct eval_ctx {
 	struct rule		*rule;
 	struct set		*set;
 	struct stmt		*stmt;
+	uint32_t		stmt_len;
 	struct expr_ctx		ectx;
-	struct proto_ctx	pctx;
+	struct proto_ctx	_pctx[2];
+	const struct proto_desc	*inner_desc;
 };
 
 extern int cmd_evaluate(struct eval_ctx *ctx, struct cmd *cmd);
@@ -777,7 +785,7 @@ struct timeout_protocol {
 	uint32_t *dflt_timeout;
 };
 
-extern struct timeout_protocol timeout_protocol[IPPROTO_MAX];
+extern struct timeout_protocol timeout_protocol[UINT8_MAX + 1];
 extern int timeout_str2num(uint16_t l4proto, struct timeout_state *ts);
 
 #endif /* NFTABLES_RULE_H */

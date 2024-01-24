@@ -9,10 +9,9 @@
  *
  */
 
+#include <nft.h>
+
 #include <stddef.h>
-#include <stdlib.h>
-#include <stdint.h>
-#include <string.h>
 #include <net/if_arp.h>
 #include <arpa/inet.h>
 #include <linux/netfilter.h>
@@ -28,6 +27,7 @@ const char *proto_base_names[] = {
 	[PROTO_BASE_LL_HDR]		= "link layer",
 	[PROTO_BASE_NETWORK_HDR]	= "network layer",
 	[PROTO_BASE_TRANSPORT_HDR]	= "transport layer",
+	[PROTO_BASE_INNER_HDR]		= "payload data",
 };
 
 const char *proto_base_tokens[] = {
@@ -35,6 +35,7 @@ const char *proto_base_tokens[] = {
 	[PROTO_BASE_LL_HDR]		= "ll",
 	[PROTO_BASE_NETWORK_HDR]	= "nh",
 	[PROTO_BASE_TRANSPORT_HDR]	= "th",
+	[PROTO_BASE_INNER_HDR]		= "ih",
 };
 
 const struct proto_hdr_template proto_unknown_template =
@@ -58,6 +59,8 @@ proto_find_upper(const struct proto_desc *base, unsigned int num)
 	unsigned int i;
 
 	for (i = 0; i < array_size(base->protocols); i++) {
+		if (!base->protocols[i].desc)
+			break;
 		if (base->protocols[i].num == num)
 			return base->protocols[i].desc;
 	}
@@ -76,10 +79,36 @@ int proto_find_num(const struct proto_desc *base,
 	unsigned int i;
 
 	for (i = 0; i < array_size(base->protocols); i++) {
+		if (!base->protocols[i].desc)
+			break;
 		if (base->protocols[i].desc == desc)
 			return base->protocols[i].num;
 	}
 	return -1;
+}
+
+static const struct proto_desc *inner_protocols[] = {
+	&proto_vxlan,
+	&proto_geneve,
+	&proto_gre,
+	&proto_gretap,
+};
+
+const struct proto_desc *proto_find_inner(uint32_t type, uint32_t hdrsize,
+					  uint32_t flags)
+{
+	const struct proto_desc *desc;
+	unsigned int i;
+
+	for (i = 0; i < array_size(inner_protocols); i++) {
+		desc = inner_protocols[i];
+		if (desc->inner.type == type &&
+		    desc->inner.hdrsize == hdrsize &&
+		    desc->inner.flags == flags)
+			return inner_protocols[i];
+	}
+
+	return &proto_unknown;
 }
 
 static const struct dev_proto_desc dev_proto_desc[] = {
@@ -104,6 +133,8 @@ int proto_dev_type(const struct proto_desc *desc, uint16_t *res)
 			return 0;
 		}
 		for (j = 0; j < array_size(base->protocols); j++) {
+			if (!base->protocols[j].desc)
+				break;
 			if (base->protocols[j].desc == desc) {
 				*res = dev_proto_desc[i].type;
 				return 0;
@@ -146,14 +177,20 @@ static void proto_ctx_debug(const struct proto_ctx *ctx, enum proto_bases base,
 	if (!(debug_mask & NFT_DEBUG_PROTO_CTX))
 		return;
 
-	pr_debug("update %s protocol context:\n", proto_base_names[base]);
+	if (base == PROTO_BASE_LL_HDR && ctx->stacked_ll_count) {
+		pr_debug(" saved ll headers:");
+		for (i = 0; i < ctx->stacked_ll_count; i++)
+			pr_debug(" %s", ctx->stacked_ll[i]->name);
+	}
+
+	pr_debug("update %s protocol context%s:\n",
+		 proto_base_names[base], ctx->inner ? " (inner)" : "");
+
 	for (i = PROTO_BASE_LL_HDR; i <= PROTO_BASE_MAX; i++) {
 		pr_debug(" %-20s: %s",
 			 proto_base_names[i],
 			 ctx->protocol[i].desc ? ctx->protocol[i].desc->name :
 						 "none");
-		if (ctx->protocol[i].offset)
-			pr_debug(" (offset: %u)", ctx->protocol[i].offset);
 		if (i == base)
 			pr_debug(" <-");
 		pr_debug("\n");
@@ -169,7 +206,7 @@ static void proto_ctx_debug(const struct proto_ctx *ctx, enum proto_bases base,
  * @debug_mask:	display debugging information
  */
 void proto_ctx_init(struct proto_ctx *ctx, unsigned int family,
-		    unsigned int debug_mask)
+		    unsigned int debug_mask, bool inner)
 {
 	const struct hook_proto_desc *h = &hook_proto_desc[family];
 
@@ -177,6 +214,7 @@ void proto_ctx_init(struct proto_ctx *ctx, unsigned int family,
 	ctx->family = family;
 	ctx->protocol[h->base].desc = h->desc;
 	ctx->debug_mask = debug_mask;
+	ctx->inner = inner;
 
 	proto_ctx_debug(ctx, h->base, debug_mask);
 }
@@ -215,6 +253,8 @@ void proto_ctx_update(struct proto_ctx *ctx, enum proto_bases base,
 			ctx->protocol[base].protos[i].desc = desc;
 			ctx->protocol[base].protos[i].location = *loc;
 		}
+		break;
+	case PROTO_BASE_INNER_HDR:
 		break;
 	default:
 		BUG("unknown protocol base %d", base);
@@ -264,6 +304,8 @@ const struct proto_desc *proto_ctx_find_conflict(struct proto_ctx *ctx,
 
 #define HDR_FIELD(__name, __struct, __member)				\
 	HDR_TEMPLATE(__name, &integer_type, __struct, __member)
+#define HDR_HEX_FIELD(__name, __struct, __member)				\
+	HDR_TEMPLATE(__name, &xinteger_type, __struct, __member)
 #define HDR_BITFIELD(__name, __dtype,  __offset, __len)			\
 	PROTO_HDR_TEMPLATE(__name, __dtype, BYTEORDER_BIG_ENDIAN,	\
 			   __offset, __len)
@@ -396,10 +438,10 @@ const struct datatype icmp_type_type = {
 	.sym_tbl	= &icmp_type_tbl,
 };
 
-#define ICMP46HDR_FIELD(__token, __struct, __member, __dep)			\
+#define ICMP46HDR_FIELD(__token, __dtype, __struct, __member, __dep)		\
 	{									\
 		.token		= (__token),					\
-		.dtype		= &integer_type,				\
+		.dtype		= &__dtype,					\
 		.byteorder	= BYTEORDER_BIG_ENDIAN,				\
 		.offset		= offsetof(__struct, __member) * 8,		\
 		.len		= field_sizeof(__struct, __member) * 8,		\
@@ -407,7 +449,7 @@ const struct datatype icmp_type_type = {
 	}
 
 #define ICMPHDR_FIELD(__token, __member, __dep) \
-	ICMP46HDR_FIELD(__token, struct icmphdr, __member, __dep)
+	ICMP46HDR_FIELD(__token, integer_type, struct icmphdr, __member, __dep)
 
 #define ICMPHDR_TYPE(__name, __type, __member) \
 	HDR_TYPE(__name,  __type, struct icmphdr, __member)
@@ -500,6 +542,10 @@ const struct proto_desc proto_udp = {
 		[UDPHDR_DPORT]		= INET_SERVICE("dport", struct udphdr, dest),
 		[UDPHDR_LENGTH]		= UDPHDR_FIELD("length", len),
 		[UDPHDR_CHECKSUM]	= UDPHDR_FIELD("checksum", check),
+	},
+	.protocols	= {
+		PROTO_LINK(0,	&proto_vxlan),
+		PROTO_LINK(0,	&proto_geneve),
 	},
 };
 
@@ -676,7 +722,9 @@ static const struct symbol_table dscp_type_tbl = {
 		SYMBOL("cs5",	0x28),
 		SYMBOL("cs6",	0x30),
 		SYMBOL("cs7",	0x38),
+		SYMBOL("df",	0x00),
 		SYMBOL("be",	0x00),
+		SYMBOL("lephb",	0x01),
 		SYMBOL("af11",	0x0a),
 		SYMBOL("af12",	0x0c),
 		SYMBOL("af13",	0x0e),
@@ -689,6 +737,7 @@ static const struct symbol_table dscp_type_tbl = {
 		SYMBOL("af41",	0x22),
 		SYMBOL("af42",	0x24),
 		SYMBOL("af43",	0x26),
+		SYMBOL("va",	0x2c),
 		SYMBOL("ef",	0x2e),
 		SYMBOL_LIST_END
 	},
@@ -727,6 +776,42 @@ const struct datatype ecn_type = {
 	.sym_tbl	= &ecn_type_tbl,
 };
 
+#define GREHDR_TEMPLATE(__name, __dtype, __member) \
+	HDR_TEMPLATE(__name, __dtype, struct grehdr, __member)
+#define GREHDR_TYPE(__name, __member) \
+	GREHDR_TEMPLATE(__name, &ethertype_type, __member)
+
+const struct proto_desc proto_gre = {
+	.name		= "gre",
+	.id		= PROTO_DESC_GRE,
+	.base		= PROTO_BASE_TRANSPORT_HDR,
+	.templates	= {
+		[0] = PROTO_META_TEMPLATE("l4proto", &inet_protocol_type, NFT_META_L4PROTO, 8),
+		[GREHDR_FLAGS]		= HDR_BITFIELD("flags", &integer_type, 0, 5),
+		[GREHDR_VERSION]	= HDR_BITFIELD("version", &integer_type, 13, 3),
+		[GREHDR_PROTOCOL]	= HDR_BITFIELD("protocol", &ethertype_type, 16, 16),
+	},
+	.inner		= {
+		.hdrsize	= sizeof(struct grehdr),
+		.flags		= NFT_INNER_NH | NFT_INNER_TH,
+		.type		= NFT_INNER_GENEVE + 1,
+	},
+};
+
+const struct proto_desc proto_gretap = {
+	.name		= "gretap",
+	.id		= PROTO_DESC_GRETAP,
+	.base		= PROTO_BASE_TRANSPORT_HDR,
+	.templates	= {
+		[0] = PROTO_META_TEMPLATE("l4proto", &inet_protocol_type, NFT_META_L4PROTO, 8),
+	},
+	.inner		= {
+		.hdrsize	= sizeof(struct grehdr),
+		.flags		= NFT_INNER_LL | NFT_INNER_NH | NFT_INNER_TH,
+		.type		= NFT_INNER_GENEVE + 2,
+	},
+};
+
 #define IPHDR_FIELD(__name, __member) \
 	HDR_FIELD(__name, struct iphdr, __member)
 #define IPHDR_ADDR(__name, __member) \
@@ -750,6 +835,8 @@ const struct proto_desc proto_ip = {
 		PROTO_LINK(IPPROTO_TCP,		&proto_tcp),
 		PROTO_LINK(IPPROTO_DCCP,	&proto_dccp),
 		PROTO_LINK(IPPROTO_SCTP,	&proto_sctp),
+		PROTO_LINK(IPPROTO_GRE,		&proto_gre),
+		PROTO_LINK(IPPROTO_GRE,		&proto_gretap),
 	},
 	.templates	= {
 		[0]	= PROTO_META_TEMPLATE("l4proto", &inet_protocol_type, NFT_META_L4PROTO, 8),
@@ -759,7 +846,7 @@ const struct proto_desc proto_ip = {
 		[IPHDR_ECN]		= HDR_BITFIELD("ecn", &ecn_type, 14, 2),
 		[IPHDR_LENGTH]		= IPHDR_FIELD("length",		tot_len),
 		[IPHDR_ID]		= IPHDR_FIELD("id",		id),
-		[IPHDR_FRAG_OFF]	= IPHDR_FIELD("frag-off",	frag_off),
+		[IPHDR_FRAG_OFF]	= HDR_HEX_FIELD("frag-off", struct iphdr, frag_off),
 		[IPHDR_TTL]		= IPHDR_FIELD("ttl",		ttl),
 		[IPHDR_PROTOCOL]	= INET_PROTOCOL("protocol", struct iphdr, protocol),
 		[IPHDR_CHECKSUM]	= IPHDR_FIELD("checksum",	check),
@@ -826,7 +913,7 @@ const struct datatype icmp6_type_type = {
 };
 
 #define ICMP6HDR_FIELD(__token, __member, __dep) \
-	ICMP46HDR_FIELD(__token, struct icmp6_hdr, __member, __dep)
+	ICMP46HDR_FIELD(__token, integer_type, struct icmp6_hdr, __member, __dep)
 #define ICMP6HDR_TYPE(__name, __type, __member) \
 	HDR_TYPE(__name, __type, struct icmp6_hdr, __member)
 
@@ -846,6 +933,12 @@ const struct proto_desc proto_icmp6 = {
 		[ICMP6HDR_ID]		= ICMP6HDR_FIELD("id", icmp6_id, PROTO_ICMP6_ECHO),
 		[ICMP6HDR_SEQ]		= ICMP6HDR_FIELD("sequence", icmp6_seq, PROTO_ICMP6_ECHO),
 		[ICMP6HDR_MAXDELAY]	= ICMP6HDR_FIELD("max-delay", icmp6_maxdelay, PROTO_ICMP6_MGMQ),
+		[ICMP6HDR_TADDR]	= ICMP46HDR_FIELD("taddr", ip6addr_type,
+							  struct nd_neighbor_solicit, nd_ns_target,
+							  PROTO_ICMP6_ADDRESS),
+		[ICMP6HDR_DADDR]	= ICMP46HDR_FIELD("daddr", ip6addr_type,
+							  struct nd_redirect, nd_rd_dst,
+							  PROTO_ICMP6_REDIRECT),
 	},
 };
 
@@ -876,6 +969,8 @@ const struct proto_desc proto_ip6 = {
 		PROTO_LINK(IPPROTO_ICMP,	&proto_icmp),
 		PROTO_LINK(IPPROTO_IGMP,	&proto_igmp),
 		PROTO_LINK(IPPROTO_ICMPV6,	&proto_icmp6),
+		PROTO_LINK(IPPROTO_GRE,		&proto_gre),
+		PROTO_LINK(IPPROTO_GRE,		&proto_gretap),
 	},
 	.templates	= {
 		[0]	= PROTO_META_TEMPLATE("l4proto", &inet_protocol_type, NFT_META_L4PROTO, 8),
@@ -941,6 +1036,8 @@ const struct proto_desc proto_inet_service = {
 		PROTO_LINK(IPPROTO_ICMP,	&proto_icmp),
 		PROTO_LINK(IPPROTO_IGMP,	&proto_igmp),
 		PROTO_LINK(IPPROTO_ICMPV6,	&proto_icmp6),
+		PROTO_LINK(IPPROTO_GRE,		&proto_gre),
+		PROTO_LINK(IPPROTO_GRE,		&proto_gretap),
 	},
 	.templates	= {
 		[0]	= PROTO_META_TEMPLATE("l4proto", &inet_protocol_type, NFT_META_L4PROTO, 8),
@@ -1121,6 +1218,57 @@ const struct proto_desc proto_eth = {
 };
 
 /*
+ * VXLAN
+ */
+
+const struct proto_desc proto_vxlan = {
+	.name		= "vxlan",
+	.id		= PROTO_DESC_VXLAN,
+	.base		= PROTO_BASE_INNER_HDR,
+	.templates	= {
+		[VXLANHDR_FLAGS] = HDR_BITFIELD("flags", &bitmask_type, 0, 8),
+		[VXLANHDR_VNI]	 = HDR_BITFIELD("vni", &integer_type, (4 * BITS_PER_BYTE), 24),
+	},
+	.protocols	= {
+		PROTO_LINK(__constant_htons(ETH_P_IP),		&proto_ip),
+		PROTO_LINK(__constant_htons(ETH_P_ARP),		&proto_arp),
+		PROTO_LINK(__constant_htons(ETH_P_IPV6),	&proto_ip6),
+		PROTO_LINK(__constant_htons(ETH_P_8021Q),	&proto_vlan),
+	},
+	.inner		= {
+		.hdrsize	= sizeof(struct vxlanhdr),
+		.flags		= NFT_INNER_HDRSIZE | NFT_INNER_LL | NFT_INNER_NH | NFT_INNER_TH,
+		.type		= NFT_INNER_VXLAN,
+	},
+};
+
+/*
+ * GENEVE
+ */
+
+const struct proto_desc proto_geneve = {
+	.name		= "geneve",
+	.id		= PROTO_DESC_GENEVE,
+	.base		= PROTO_BASE_INNER_HDR,
+	.templates	= {
+		[GNVHDR_TYPE]	= HDR_TYPE("type", &ethertype_type, struct gnvhdr, type),
+		[GNVHDR_VNI]	= HDR_BITFIELD("vni", &integer_type, (4 * BITS_PER_BYTE), 24),
+	},
+	.protocols	= {
+		PROTO_LINK(__constant_htons(ETH_P_IP),		&proto_ip),
+		PROTO_LINK(__constant_htons(ETH_P_ARP),		&proto_arp),
+		PROTO_LINK(__constant_htons(ETH_P_IPV6),	&proto_ip6),
+		PROTO_LINK(__constant_htons(ETH_P_8021Q),	&proto_vlan),
+	},
+	.inner		= {
+		.hdrsize	= sizeof(struct gnvhdr),
+		.flags		= NFT_INNER_HDRSIZE | NFT_INNER_LL | NFT_INNER_NH | NFT_INNER_TH,
+		.type		= NFT_INNER_GENEVE,
+	},
+};
+
+
+/*
  * Dummy protocol for netdev tables.
  */
 const struct proto_desc proto_netdev = {
@@ -1138,7 +1286,7 @@ const struct proto_desc proto_netdev = {
 	},
 };
 
-static const struct proto_desc *proto_definitions[PROTO_DESC_MAX + 1] = {
+static const struct proto_desc *const proto_definitions[PROTO_DESC_MAX + 1] = {
 	[PROTO_DESC_AH]		= &proto_ah,
 	[PROTO_DESC_ESP]	= &proto_esp,
 	[PROTO_DESC_COMP]	= &proto_comp,
@@ -1156,6 +1304,10 @@ static const struct proto_desc *proto_definitions[PROTO_DESC_MAX + 1] = {
 	[PROTO_DESC_ARP]	= &proto_arp,
 	[PROTO_DESC_VLAN]	= &proto_vlan,
 	[PROTO_DESC_ETHER]	= &proto_eth,
+	[PROTO_DESC_VXLAN]	= &proto_vxlan,
+	[PROTO_DESC_GENEVE]	= &proto_geneve,
+	[PROTO_DESC_GRE]	= &proto_gre,
+	[PROTO_DESC_GRETAP]	= &proto_gretap,
 };
 
 const struct proto_desc *proto_find_desc(enum proto_desc_id desc_id)
