@@ -10,11 +10,10 @@
  * Development of this code funded by Astaro AG (http://www.astaro.com/)
  */
 
+#include <nft.h>
+
 #include <stddef.h>
-#include <stdlib.h>
 #include <stdio.h>
-#include <stdint.h>
-#include <string.h>
 #include <net/if_arp.h>
 #include <arpa/inet.h>
 #include <linux/netfilter.h>
@@ -47,6 +46,10 @@ static void payload_expr_print(const struct expr *expr, struct output_ctx *octx)
 	const struct proto_desc *desc;
 	const struct proto_hdr_template *tmpl;
 
+	if (expr->payload.inner_desc &&
+	    expr->payload.inner_desc != expr->payload.desc)
+		nft_print(octx, "%s ", expr->payload.inner_desc->name);
+
 	desc = expr->payload.desc;
 	tmpl = expr->payload.tmpl;
 	if (payload_is_known(expr))
@@ -67,6 +70,7 @@ bool payload_expr_cmp(const struct expr *e1, const struct expr *e2)
 
 static void payload_expr_clone(struct expr *new, const struct expr *expr)
 {
+	new->payload.inner_desc   = expr->payload.inner_desc;
 	new->payload.desc   = expr->payload.desc;
 	new->payload.tmpl   = expr->payload.tmpl;
 	new->payload.base   = expr->payload.base;
@@ -115,18 +119,32 @@ static void payload_expr_pctx_update(struct proto_ctx *ctx,
 	assert(desc->base <= PROTO_BASE_MAX);
 	if (desc->base == base->base) {
 		assert(base->length > 0);
-		ctx->protocol[base->base].offset += base->length;
+
+		if (!left->payload.is_raw) {
+			if (desc->base == PROTO_BASE_LL_HDR &&
+			    ctx->stacked_ll_count < PROTO_CTX_NUM_PROTOS) {
+				ctx->stacked_ll[ctx->stacked_ll_count] = base;
+				ctx->stacked_ll_count++;
+			}
+		}
 	}
 	proto_ctx_update(ctx, desc->base, loc, desc);
 }
 
 #define NFTNL_UDATA_SET_KEY_PAYLOAD_DESC 0
 #define NFTNL_UDATA_SET_KEY_PAYLOAD_TYPE 1
-#define NFTNL_UDATA_SET_KEY_PAYLOAD_MAX 2
+#define NFTNL_UDATA_SET_KEY_PAYLOAD_BASE 2
+#define NFTNL_UDATA_SET_KEY_PAYLOAD_OFFSET 3
+#define NFTNL_UDATA_SET_KEY_PAYLOAD_LEN 4
+#define NFTNL_UDATA_SET_KEY_PAYLOAD_INNER_DESC 5
+#define NFTNL_UDATA_SET_KEY_PAYLOAD_MAX 6
 
 static unsigned int expr_payload_type(const struct proto_desc *desc,
 				      const struct proto_hdr_template *tmpl)
 {
+	if (desc->id == PROTO_DESC_UNKNOWN)
+		return 0;
+
 	return (unsigned int)(tmpl - &desc->templates[0]);
 }
 
@@ -140,10 +158,24 @@ static int payload_expr_build_udata(struct nftnl_udata_buf *udbuf,
 	nftnl_udata_put_u32(udbuf, NFTNL_UDATA_SET_KEY_PAYLOAD_DESC, desc->id);
 	nftnl_udata_put_u32(udbuf, NFTNL_UDATA_SET_KEY_PAYLOAD_TYPE, type);
 
+	if (desc->id == 0) {
+		nftnl_udata_put_u32(udbuf, NFTNL_UDATA_SET_KEY_PAYLOAD_BASE,
+				    expr->payload.base);
+		nftnl_udata_put_u32(udbuf, NFTNL_UDATA_SET_KEY_PAYLOAD_OFFSET,
+				    expr->payload.offset);
+	}
+	if (expr->dtype->type == TYPE_INTEGER)
+		nftnl_udata_put_u32(udbuf, NFTNL_UDATA_SET_KEY_PAYLOAD_LEN, expr->len);
+
+	if (expr->payload.inner_desc) {
+		nftnl_udata_put_u32(udbuf, NFTNL_UDATA_SET_KEY_PAYLOAD_INNER_DESC,
+				    expr->payload.inner_desc->id);
+	}
+
 	return 0;
 }
 
-static const struct proto_desc *find_proto_desc(const struct nftnl_udata *ud)
+const struct proto_desc *find_proto_desc(const struct nftnl_udata *ud)
 {
 	return proto_find_desc(nftnl_udata_get_u32(ud));
 }
@@ -157,6 +189,10 @@ static int payload_parse_udata(const struct nftnl_udata *attr, void *data)
 	switch (type) {
 	case NFTNL_UDATA_SET_KEY_PAYLOAD_DESC:
 	case NFTNL_UDATA_SET_KEY_PAYLOAD_TYPE:
+	case NFTNL_UDATA_SET_KEY_PAYLOAD_BASE:
+	case NFTNL_UDATA_SET_KEY_PAYLOAD_OFFSET:
+	case NFTNL_UDATA_SET_KEY_PAYLOAD_LEN:
+	case NFTNL_UDATA_SET_KEY_PAYLOAD_INNER_DESC:
 		if (len != sizeof(uint32_t))
 			return -1;
 		break;
@@ -171,8 +207,10 @@ static int payload_parse_udata(const struct nftnl_udata *attr, void *data)
 static struct expr *payload_expr_parse_udata(const struct nftnl_udata *attr)
 {
 	const struct nftnl_udata *ud[NFTNL_UDATA_SET_KEY_PAYLOAD_MAX + 1] = {};
+	unsigned int type, base, offset, len = 0;
 	const struct proto_desc *desc;
-	unsigned int type;
+	bool is_raw = false;
+	struct expr *expr;
 	int err;
 
 	err = nftnl_udata_parse(nftnl_udata_get(attr), nftnl_udata_len(attr),
@@ -185,12 +223,44 @@ static struct expr *payload_expr_parse_udata(const struct nftnl_udata *attr)
 		return NULL;
 
 	desc = find_proto_desc(ud[NFTNL_UDATA_SET_KEY_PAYLOAD_DESC]);
-	if (!desc)
-		return NULL;
+	if (!desc) {
+		if (!ud[NFTNL_UDATA_SET_KEY_PAYLOAD_BASE] ||
+		    !ud[NFTNL_UDATA_SET_KEY_PAYLOAD_OFFSET])
+			return NULL;
+
+		base = nftnl_udata_get_u32(ud[NFTNL_UDATA_SET_KEY_PAYLOAD_BASE]);
+		offset = nftnl_udata_get_u32(ud[NFTNL_UDATA_SET_KEY_PAYLOAD_OFFSET]);
+		is_raw = true;
+	}
 
 	type = nftnl_udata_get_u32(ud[NFTNL_UDATA_SET_KEY_PAYLOAD_TYPE]);
+	if (ud[NFTNL_UDATA_SET_KEY_PAYLOAD_LEN])
+		len = nftnl_udata_get_u32(ud[NFTNL_UDATA_SET_KEY_PAYLOAD_LEN]);
 
-	return payload_expr_alloc(&internal_location, desc, type);
+	expr = payload_expr_alloc(&internal_location, desc, type);
+
+	if (len)
+		expr->len = len;
+
+	if (is_raw) {
+		struct datatype *dtype;
+
+		expr->payload.base = base;
+		expr->payload.offset = offset;
+		expr->payload.is_raw = true;
+		expr->len = len;
+		dtype = datatype_clone(&xinteger_type);
+		dtype->size = len;
+		dtype->byteorder = BYTEORDER_BIG_ENDIAN;
+		__datatype_set(expr, dtype);
+	}
+
+	if (ud[NFTNL_UDATA_SET_KEY_PAYLOAD_INNER_DESC]) {
+		desc = find_proto_desc(ud[NFTNL_UDATA_SET_KEY_PAYLOAD_INNER_DESC]);
+		expr->payload.inner_desc = desc;
+	}
+
+	return expr;
 }
 
 const struct expr_ops payload_expr_ops = {
@@ -267,7 +337,7 @@ void payload_init_raw(struct expr *expr, enum proto_bases base,
 	expr->payload.base	= base;
 	expr->payload.offset	= offset;
 	expr->len		= len;
-	expr->dtype		= &integer_type;
+	expr->dtype		= &xinteger_type;
 
 	if (base != PROTO_BASE_TRANSPORT_HDR)
 		return;
@@ -336,9 +406,12 @@ static int payload_add_dependency(struct eval_ctx *ctx,
 {
 	const struct proto_hdr_template *tmpl;
 	struct expr *dep, *left, *right;
+	struct proto_ctx *pctx;
+	unsigned int stmt_len;
 	struct stmt *stmt;
-	int protocol = proto_find_num(desc, upper);
+	int protocol;
 
+	protocol = proto_find_num(desc, upper);
 	if (protocol < 0)
 		return expr_error(ctx->msgs, expr,
 				  "conflicting protocols specified: %s vs. %s",
@@ -355,20 +428,34 @@ static int payload_add_dependency(struct eval_ctx *ctx,
 				    constant_data_ptr(protocol, tmpl->len));
 
 	dep = relational_expr_alloc(&expr->location, OP_EQ, left, right);
+
+	stmt_len = ctx->stmt_len;
+	ctx->stmt_len = 0;
+
 	stmt = expr_stmt_alloc(&dep->location, dep);
 	if (stmt_evaluate(ctx, stmt) < 0) {
 		return expr_error(ctx->msgs, expr,
 					  "dependency statement is invalid");
 	}
-	relational_expr_pctx_update(&ctx->pctx, dep);
+	ctx->stmt_len = stmt_len;
+
+	if (ctx->inner_desc) {
+		if (tmpl->meta_key)
+			left->meta.inner_desc = ctx->inner_desc;
+		else
+			left->payload.inner_desc = ctx->inner_desc;
+	}
+
+	pctx = eval_proto_ctx(ctx);
+	relational_expr_pctx_update(pctx, dep);
 	*res = stmt;
 	return 0;
 }
 
 static const struct proto_desc *
-payload_get_get_ll_hdr(const struct eval_ctx *ctx)
+payload_get_get_ll_hdr(const struct proto_ctx *pctx)
 {
-	switch (ctx->pctx.family) {
+	switch (pctx->family) {
 	case NFPROTO_INET:
 		return &proto_inet;
 	case NFPROTO_BRIDGE:
@@ -385,9 +472,11 @@ payload_get_get_ll_hdr(const struct eval_ctx *ctx)
 static const struct proto_desc *
 payload_gen_special_dependency(struct eval_ctx *ctx, const struct expr *expr)
 {
+	struct proto_ctx *pctx = eval_proto_ctx(ctx);
+
 	switch (expr->payload.base) {
 	case PROTO_BASE_LL_HDR:
-		return payload_get_get_ll_hdr(ctx);
+		return payload_get_get_ll_hdr(pctx);
 	case PROTO_BASE_TRANSPORT_HDR:
 		if (expr->payload.desc == &proto_icmp ||
 		    expr->payload.desc == &proto_icmp6 ||
@@ -395,12 +484,20 @@ payload_gen_special_dependency(struct eval_ctx *ctx, const struct expr *expr)
 			const struct proto_desc *desc, *desc_upper;
 			struct stmt *nstmt;
 
-			desc = ctx->pctx.protocol[PROTO_BASE_LL_HDR].desc;
+			desc = pctx->protocol[PROTO_BASE_LL_HDR].desc;
 			if (!desc) {
-				desc = payload_get_get_ll_hdr(ctx);
+				desc = payload_get_get_ll_hdr(pctx);
 				if (!desc)
 					break;
 			}
+
+			/* this tunnel protocol does not encapsulate an inner
+			 * link layer, use proto_netdev which relies on
+			 * NFT_META_PROTOCOL for dependencies.
+			 */
+			if (expr->payload.inner_desc &&
+			    !(expr->payload.inner_desc->inner.flags & NFT_INNER_LL))
+				desc = &proto_netdev;
 
 			desc_upper = &proto_ip6;
 			if (expr->payload.desc == &proto_icmp ||
@@ -447,11 +544,15 @@ payload_gen_special_dependency(struct eval_ctx *ctx, const struct expr *expr)
 int payload_gen_dependency(struct eval_ctx *ctx, const struct expr *expr,
 			   struct stmt **res)
 {
-	const struct hook_proto_desc *h = &hook_proto_desc[ctx->pctx.family];
+	const struct hook_proto_desc *h;
 	const struct proto_desc *desc;
+	struct proto_ctx *pctx;
+	unsigned int stmt_len;
 	struct stmt *stmt;
 	uint16_t type;
 
+	pctx = eval_proto_ctx(ctx);
+	h = &hook_proto_desc[pctx->family];
 	if (expr->payload.base < h->base) {
 		if (expr->payload.base < h->base - 1)
 			return expr_error(ctx->msgs, expr,
@@ -463,16 +564,22 @@ int payload_gen_dependency(struct eval_ctx *ctx, const struct expr *expr,
 					  "protocol specification is invalid "
 					  "for this family");
 
+		stmt_len = ctx->stmt_len;
+		ctx->stmt_len = 0;
+
 		stmt = meta_stmt_meta_iiftype(&expr->location, type);
 		if (stmt_evaluate(ctx, stmt) < 0) {
 			return expr_error(ctx->msgs, expr,
 					  "dependency statement is invalid");
 		}
 		*res = stmt;
+
+		ctx->stmt_len = stmt_len;
+
 		return 0;
 	}
 
-	desc = ctx->pctx.protocol[expr->payload.base - 1].desc;
+	desc = pctx->protocol[expr->payload.base - 1].desc;
 	/* Special case for mixed IPv4/IPv6 and bridge tables */
 	if (desc == NULL)
 		desc = payload_gen_special_dependency(ctx, expr);
@@ -483,7 +590,7 @@ int payload_gen_dependency(struct eval_ctx *ctx, const struct expr *expr,
 				  "no %s protocol specified",
 				  proto_base_names[expr->payload.base - 1]);
 
-	if (ctx->pctx.family == NFPROTO_BRIDGE && desc == &proto_eth) {
+	if (pctx->family == NFPROTO_BRIDGE && desc == &proto_eth) {
 		/* prefer netdev proto, which adds dependencies based
 		 * on skb->protocol.
 		 *
@@ -508,11 +615,13 @@ int exthdr_gen_dependency(struct eval_ctx *ctx, const struct expr *expr,
 			  enum proto_bases pb, struct stmt **res)
 {
 	const struct proto_desc *desc;
+	struct proto_ctx *pctx;
 
-	desc = ctx->pctx.protocol[pb].desc;
+	pctx = eval_proto_ctx(ctx);
+	desc = pctx->protocol[pb].desc;
 	if (desc == NULL) {
 		if (expr->exthdr.op == NFT_EXTHDR_OP_TCPOPT) {
-			switch (ctx->pctx.family) {
+			switch (pctx->family) {
 			case NFPROTO_NETDEV:
 			case NFPROTO_BRIDGE:
 			case NFPROTO_INET:
@@ -608,8 +717,7 @@ void payload_dependency_store(struct payload_dep_ctx *ctx,
 	if (ignore_dep)
 		return;
 
-	ctx->pdep  = stmt;
-	ctx->pbase = base + 1;
+	ctx->pdeps[base + 1] = stmt;
 }
 
 /**
@@ -624,20 +732,53 @@ void payload_dependency_store(struct payload_dep_ctx *ctx,
 bool payload_dependency_exists(const struct payload_dep_ctx *ctx,
 			       enum proto_bases base)
 {
-	return ctx->pbase != PROTO_BASE_INVALID &&
-	       ctx->pdep != NULL &&
-	       (ctx->pbase == base || (base == PROTO_BASE_TRANSPORT_HDR && ctx->pbase == base + 1));
+	if (ctx->pdeps[base])
+		return true;
+
+	return	base == PROTO_BASE_TRANSPORT_HDR &&
+		ctx->pdeps[PROTO_BASE_INNER_HDR];
 }
 
-void payload_dependency_release(struct payload_dep_ctx *ctx)
+/**
+ * payload_dependency_get - return a payload dependency if available
+ * @ctx: payload dependency context
+ * @base: payload protocol base
+ *
+ * If we have seen a protocol key payload expression for this base, we return
+ * it.
+ */
+struct expr *payload_dependency_get(struct payload_dep_ctx *ctx,
+				    enum proto_bases base)
 {
-	list_del(&ctx->pdep->list);
-	stmt_free(ctx->pdep);
+	if (ctx->pdeps[base])
+		return ctx->pdeps[base]->expr;
 
-	ctx->pbase = PROTO_BASE_INVALID;
-	if (ctx->pdep == ctx->prev)
+	if (base == PROTO_BASE_TRANSPORT_HDR &&
+	    ctx->pdeps[PROTO_BASE_INNER_HDR])
+		return ctx->pdeps[PROTO_BASE_INNER_HDR]->expr;
+
+	return NULL;
+}
+
+static void __payload_dependency_release(struct payload_dep_ctx *ctx,
+					 enum proto_bases base)
+{
+	list_del(&ctx->pdeps[base]->list);
+	stmt_free(ctx->pdeps[base]);
+
+	if (ctx->pdeps[base] == ctx->prev)
 		ctx->prev = NULL;
-	ctx->pdep  = NULL;
+	ctx->pdeps[base] = NULL;
+}
+
+void payload_dependency_release(struct payload_dep_ctx *ctx,
+				enum proto_bases base)
+{
+	if (ctx->pdeps[base])
+		__payload_dependency_release(ctx, base);
+	else if (base == PROTO_BASE_TRANSPORT_HDR &&
+		 ctx->pdeps[PROTO_BASE_INNER_HDR])
+		__payload_dependency_release(ctx, PROTO_BASE_INNER_HDR);
 }
 
 static uint8_t icmp_dep_to_type(enum icmp_hdr_field_type t)
@@ -652,33 +793,67 @@ static uint8_t icmp_dep_to_type(enum icmp_hdr_field_type t)
 	case PROTO_ICMP6_MTU: return ICMP6_PACKET_TOO_BIG;
 	case PROTO_ICMP6_MGMQ: return MLD_LISTENER_QUERY;
 	case PROTO_ICMP6_PPTR: return ICMP6_PARAM_PROB;
+	case PROTO_ICMP6_REDIRECT: return ND_REDIRECT;
+	case PROTO_ICMP6_ADDRESS: return ND_NEIGHBOR_SOLICIT;
 	}
 
 	BUG("Missing icmp type mapping");
 }
 
+static bool icmp_dep_type_match(enum icmp_hdr_field_type t, uint8_t type)
+{
+	switch (t) {
+	case PROTO_ICMP_ECHO:
+		return type == ICMP_ECHO || type == ICMP_ECHOREPLY;
+	case PROTO_ICMP6_ECHO:
+		return type == ICMP6_ECHO_REQUEST || type == ICMP6_ECHO_REPLY;
+	case PROTO_ICMP6_ADDRESS:
+		return type == ND_NEIGHBOR_SOLICIT ||
+		       type == ND_NEIGHBOR_ADVERT ||
+		       type == ND_REDIRECT ||
+		       type == MLD_LISTENER_QUERY ||
+		       type == MLD_LISTENER_REPORT ||
+		       type == MLD_LISTENER_REDUCTION;
+	case PROTO_ICMP_ADDRESS:
+	case PROTO_ICMP_MTU:
+	case PROTO_ICMP6_MTU:
+	case PROTO_ICMP6_MGMQ:
+	case PROTO_ICMP6_PPTR:
+	case PROTO_ICMP6_REDIRECT:
+		return icmp_dep_to_type(t) == type;
+	case PROTO_ICMP_ANY:
+		return true;
+	}
+	BUG("Missing icmp type mapping");
+}
+
 static bool payload_may_dependency_kill_icmp(struct payload_dep_ctx *ctx, struct expr *expr)
 {
-	const struct expr *dep = ctx->pdep->expr;
-	uint8_t icmp_type;
+	const struct expr *dep = payload_dependency_get(ctx, expr->payload.base);
+	enum icmp_hdr_field_type icmp_dep;
 
-	icmp_type = expr->payload.tmpl->icmp_dep;
-	if (icmp_type == PROTO_ICMP_ANY)
+	icmp_dep = expr->payload.tmpl->icmp_dep;
+	if (icmp_dep == PROTO_ICMP_ANY)
 		return false;
 
 	if (dep->left->payload.desc != expr->payload.desc)
 		return false;
 
-	icmp_type = icmp_dep_to_type(expr->payload.tmpl->icmp_dep);
+	if (expr->payload.tmpl->icmp_dep == PROTO_ICMP_ECHO ||
+	    expr->payload.tmpl->icmp_dep == PROTO_ICMP6_ECHO ||
+	    expr->payload.tmpl->icmp_dep == PROTO_ICMP6_ADDRESS)
+		return false;
 
-	return ctx->icmp_type == icmp_type;
+	return ctx->icmp_type == icmp_dep_to_type(icmp_dep);
 }
 
 static bool payload_may_dependency_kill_ll(struct payload_dep_ctx *ctx, struct expr *expr)
 {
-	const struct expr *dep = ctx->pdep->expr;
+	const struct expr *dep = payload_dependency_get(ctx, expr->payload.base);
 
-	/* Never remove a 'vlan type 0x...' expression, they are never added implicitly */
+	/* Never remove a 'vlan type 0x...' expression, they are never added
+	 * implicitly
+	 */
 	if (dep->left->payload.desc == &proto_vlan)
 		return false;
 
@@ -695,7 +870,7 @@ static bool payload_may_dependency_kill_ll(struct payload_dep_ctx *ctx, struct e
 static bool payload_may_dependency_kill(struct payload_dep_ctx *ctx,
 					unsigned int family, struct expr *expr)
 {
-	struct expr *dep = ctx->pdep->expr;
+	struct expr *dep = payload_dependency_get(ctx, expr->payload.base);
 
 	/* Protocol key payload expression at network base such as 'ip6 nexthdr'
 	 * need to be left in place since it implicitly restricts matching to
@@ -731,13 +906,17 @@ static bool payload_may_dependency_kill(struct payload_dep_ctx *ctx,
 		break;
 	}
 
-	if (expr->payload.base == PROTO_BASE_TRANSPORT_HDR &&
-	    dep->left->payload.base == PROTO_BASE_TRANSPORT_HDR) {
-		if (dep->left->payload.desc == &proto_icmp)
-			return payload_may_dependency_kill_icmp(ctx, expr);
-		if (dep->left->payload.desc == &proto_icmp6)
-			return payload_may_dependency_kill_icmp(ctx, expr);
-	}
+	if (expr->payload.base != PROTO_BASE_TRANSPORT_HDR)
+		return true;
+
+	if (dep->left->payload.base != PROTO_BASE_TRANSPORT_HDR)
+		return true;
+
+	if (dep->left->payload.desc == &proto_icmp)
+		return payload_may_dependency_kill_icmp(ctx, expr);
+
+	if (dep->left->payload.desc == &proto_icmp6)
+		return payload_may_dependency_kill_icmp(ctx, expr);
 
 	return true;
 }
@@ -755,9 +934,10 @@ static bool payload_may_dependency_kill(struct payload_dep_ctx *ctx,
 void payload_dependency_kill(struct payload_dep_ctx *ctx, struct expr *expr,
 			     unsigned int family)
 {
-	if (payload_dependency_exists(ctx, expr->payload.base) &&
+	if (expr->payload.desc != &proto_unknown &&
+	    payload_dependency_exists(ctx, expr->payload.base) &&
 	    payload_may_dependency_kill(ctx, family, expr))
-		payload_dependency_release(ctx);
+		payload_dependency_release(ctx, expr->payload.base);
 }
 
 void exthdr_dependency_kill(struct payload_dep_ctx *ctx, struct expr *expr,
@@ -766,19 +946,51 @@ void exthdr_dependency_kill(struct payload_dep_ctx *ctx, struct expr *expr,
 	switch (expr->exthdr.op) {
 	case NFT_EXTHDR_OP_TCPOPT:
 		if (payload_dependency_exists(ctx, PROTO_BASE_TRANSPORT_HDR))
-			payload_dependency_release(ctx);
+			payload_dependency_release(ctx, PROTO_BASE_TRANSPORT_HDR);
 		break;
 	case NFT_EXTHDR_OP_IPV6:
 		if (payload_dependency_exists(ctx, PROTO_BASE_NETWORK_HDR))
-			payload_dependency_release(ctx);
+			payload_dependency_release(ctx, PROTO_BASE_NETWORK_HDR);
 		break;
 	case NFT_EXTHDR_OP_IPV4:
 		if (payload_dependency_exists(ctx, PROTO_BASE_NETWORK_HDR))
-			payload_dependency_release(ctx);
+			payload_dependency_release(ctx, PROTO_BASE_NETWORK_HDR);
 		break;
 	default:
 		break;
 	}
+}
+
+static const struct proto_desc *get_stacked_desc(const struct proto_ctx *ctx,
+						 const struct proto_desc *top,
+						 const struct expr *e,
+						 unsigned int *skip)
+{
+	unsigned int i, total, payload_offset = e->payload.offset;
+
+	assert(e->etype == EXPR_PAYLOAD);
+
+	if (e->payload.base != PROTO_BASE_LL_HDR ||
+	    payload_offset < top->length) {
+		*skip = 0;
+		return top;
+	}
+
+	for (i = 0, total = 0; i < ctx->stacked_ll_count; i++) {
+		const struct proto_desc *stacked;
+
+		stacked = ctx->stacked_ll[i];
+		if (payload_offset < stacked->length) {
+			*skip = total;
+			return stacked;
+		}
+
+		payload_offset -= stacked->length;
+		total += stacked->length;
+	}
+
+	*skip = total;
+	return top;
 }
 
 /**
@@ -792,9 +1004,10 @@ void exthdr_dependency_kill(struct payload_dep_ctx *ctx, struct expr *expr,
  */
 void payload_expr_complete(struct expr *expr, const struct proto_ctx *ctx)
 {
+	unsigned int payload_offset = expr->payload.offset;
 	const struct proto_desc *desc;
 	const struct proto_hdr_template *tmpl;
-	unsigned int i;
+	unsigned int i, total;
 
 	assert(expr->etype == EXPR_PAYLOAD);
 
@@ -803,18 +1016,26 @@ void payload_expr_complete(struct expr *expr, const struct proto_ctx *ctx)
 		return;
 	assert(desc->base == expr->payload.base);
 
+	desc = get_stacked_desc(ctx, desc, expr, &total);
+	payload_offset -= total;
+
 	for (i = 0; i < array_size(desc->templates); i++) {
 		tmpl = &desc->templates[i];
-		if (tmpl->offset != expr->payload.offset ||
+		if (tmpl->offset != payload_offset ||
 		    tmpl->len    != expr->len)
 			continue;
 
+		if (tmpl->meta_key && i == 0)
+			continue;
+
 		if (tmpl->icmp_dep && ctx->th_dep.icmp.type &&
-		    ctx->th_dep.icmp.type != icmp_dep_to_type(tmpl->icmp_dep))
+		    !icmp_dep_type_match(tmpl->icmp_dep,
+					 ctx->th_dep.icmp.type))
 			continue;
 
 		expr->dtype	   = tmpl->dtype;
 		expr->payload.desc = desc;
+		expr->byteorder = tmpl->byteorder;
 		expr->payload.tmpl = tmpl;
 		return;
 	}
@@ -859,6 +1080,7 @@ bool payload_expr_trim(struct expr *expr, struct expr *mask,
 	unsigned int payload_len = expr->len;
 	const struct proto_desc *desc;
 	unsigned int off, i, len = 0;
+	unsigned int total;
 
 	assert(expr->etype == EXPR_PAYLOAD);
 
@@ -868,10 +1090,8 @@ bool payload_expr_trim(struct expr *expr, struct expr *mask,
 
 	assert(desc->base == expr->payload.base);
 
-	if (ctx->protocol[expr->payload.base].offset) {
-		assert(payload_offset >= ctx->protocol[expr->payload.base].offset);
-		payload_offset -= ctx->protocol[expr->payload.base].offset;
-	}
+	desc = get_stacked_desc(ctx, desc, expr, &total);
+	payload_offset -= total;
 
 	off = round_up(mask->len, BITS_PER_BYTE) - mask_len;
 	payload_offset += off;
@@ -918,17 +1138,22 @@ bool payload_expr_trim(struct expr *expr, struct expr *mask,
 void payload_expr_expand(struct list_head *list, struct expr *expr,
 			 const struct proto_ctx *ctx)
 {
+	unsigned int payload_offset = expr->payload.offset;
 	const struct proto_hdr_template *tmpl;
 	const struct proto_desc *desc;
+	unsigned int i, total;
 	struct expr *new;
-	unsigned int i;
 
 	assert(expr->etype == EXPR_PAYLOAD);
 
 	desc = ctx->protocol[expr->payload.base].desc;
-	if (desc == NULL)
+	if (desc == NULL || desc == &proto_unknown)
 		goto raw;
+
 	assert(desc->base == expr->payload.base);
+
+	desc = get_stacked_desc(ctx, desc, expr, &total);
+	payload_offset -= total;
 
 	for (i = 1; i < array_size(desc->templates); i++) {
 		tmpl = &desc->templates[i];
@@ -936,11 +1161,12 @@ void payload_expr_expand(struct list_head *list, struct expr *expr,
 		if (tmpl->len == 0)
 			break;
 
-		if (tmpl->offset != expr->payload.offset)
+		if (tmpl->offset != payload_offset)
 			continue;
 
 		if (tmpl->icmp_dep && ctx->th_dep.icmp.type &&
-		     ctx->th_dep.icmp.type != icmp_dep_to_type(tmpl->icmp_dep))
+		    !icmp_dep_type_match(tmpl->icmp_dep,
+					 ctx->th_dep.icmp.type))
 			continue;
 
 		if (tmpl->len <= expr->len) {
@@ -948,6 +1174,7 @@ void payload_expr_expand(struct list_head *list, struct expr *expr,
 			list_add_tail(&new->list, list);
 			expr->len	     -= tmpl->len;
 			expr->payload.offset += tmpl->len;
+			payload_offset       += tmpl->len;
 			if (expr->len == 0)
 				return;
 		} else if (expr->len > 0) {
@@ -960,8 +1187,12 @@ void payload_expr_expand(struct list_head *list, struct expr *expr,
 	}
 raw:
 	new = payload_expr_alloc(&expr->location, NULL, 0);
-	payload_init_raw(new, expr->payload.base, expr->payload.offset,
+	payload_init_raw(new, expr->payload.base, payload_offset,
 			 expr->len);
+
+	if (expr->payload.inner_desc)
+		new->dtype = &integer_type;
+
 	list_add_tail(&new->list, list);
 }
 
@@ -982,6 +1213,9 @@ static bool payload_is_adjacent(const struct expr *e1, const struct expr *e2)
 bool payload_can_merge(const struct expr *e1, const struct expr *e2)
 {
 	unsigned int total;
+
+	if (e1->payload.inner_desc != e2->payload.inner_desc)
+		return false;
 
 	if (!payload_is_adjacent(e1, e2))
 		return false;
@@ -1039,6 +1273,8 @@ struct expr *payload_expr_join(const struct expr *e1, const struct expr *e2)
 	expr->payload.base   = e1->payload.base;
 	expr->payload.offset = e1->payload.offset;
 	expr->len	     = e1->len + e2->len;
+	expr->payload.inner_desc = e1->payload.inner_desc;
+
 	return expr;
 }
 
@@ -1087,9 +1323,42 @@ __payload_gen_icmp_echo_dependency(struct eval_ctx *ctx, const struct expr *expr
 	return expr_stmt_alloc(&dep->location, dep);
 }
 
+static struct stmt *
+__payload_gen_icmp6_addr_dependency(struct eval_ctx *ctx, const struct expr *expr,
+				    const struct proto_desc *desc)
+{
+	static const uint8_t icmp_addr_types[] = {
+		MLD_LISTENER_QUERY,
+		MLD_LISTENER_REPORT,
+		MLD_LISTENER_REDUCTION,
+		ND_NEIGHBOR_SOLICIT,
+		ND_NEIGHBOR_ADVERT,
+		ND_REDIRECT
+	};
+	struct expr *left, *right, *dep, *set;
+	size_t i;
+
+	left = payload_expr_alloc(&expr->location, desc, desc->protocol_key);
+
+	set = set_expr_alloc(&expr->location, NULL);
+
+	for (i = 0; i < array_size(icmp_addr_types); ++i) {
+		right = constant_expr_alloc(&expr->location, &icmp6_type_type,
+					    BYTEORDER_BIG_ENDIAN, BITS_PER_BYTE,
+					    constant_data_ptr(icmp_addr_types[i],
+							      BITS_PER_BYTE));
+		right = set_elem_expr_alloc(&expr->location, right);
+		compound_expr_add(set, right);
+	}
+
+	dep = relational_expr_alloc(&expr->location, OP_IMPLICIT, left, set);
+	return expr_stmt_alloc(&dep->location, dep);
+}
+
 int payload_gen_icmp_dependency(struct eval_ctx *ctx, const struct expr *expr,
 				struct stmt **res)
 {
+	struct proto_ctx *pctx = eval_proto_ctx(ctx);
 	const struct proto_hdr_template *tmpl;
 	const struct proto_desc *desc;
 	struct stmt *stmt = NULL;
@@ -1106,11 +1375,11 @@ int payload_gen_icmp_dependency(struct eval_ctx *ctx, const struct expr *expr,
 		break;
 	case PROTO_ICMP_ECHO:
 		/* do not test ICMP_ECHOREPLY here: its 0 */
-		if (ctx->pctx.th_dep.icmp.type == ICMP_ECHO)
+		if (pctx->th_dep.icmp.type == ICMP_ECHO)
 			goto done;
 
 		type = ICMP_ECHO;
-		if (ctx->pctx.th_dep.icmp.type)
+		if (pctx->th_dep.icmp.type)
 			goto bad_proto;
 
 		stmt = __payload_gen_icmp_echo_dependency(ctx, expr,
@@ -1121,21 +1390,21 @@ int payload_gen_icmp_dependency(struct eval_ctx *ctx, const struct expr *expr,
 	case PROTO_ICMP_MTU:
 	case PROTO_ICMP_ADDRESS:
 		type = icmp_dep_to_type(tmpl->icmp_dep);
-		if (ctx->pctx.th_dep.icmp.type == type)
+		if (pctx->th_dep.icmp.type == type)
 			goto done;
-		if (ctx->pctx.th_dep.icmp.type)
+		if (pctx->th_dep.icmp.type)
 			goto bad_proto;
 		stmt = __payload_gen_icmp_simple_dependency(ctx, expr,
 							    &icmp_type_type,
 							    desc, type);
 		break;
 	case PROTO_ICMP6_ECHO:
-		if (ctx->pctx.th_dep.icmp.type == ICMP6_ECHO_REQUEST ||
-		    ctx->pctx.th_dep.icmp.type == ICMP6_ECHO_REPLY)
+		if (pctx->th_dep.icmp.type == ICMP6_ECHO_REQUEST ||
+		    pctx->th_dep.icmp.type == ICMP6_ECHO_REPLY)
 			goto done;
 
 		type = ICMP6_ECHO_REQUEST;
-		if (ctx->pctx.th_dep.icmp.type)
+		if (pctx->th_dep.icmp.type)
 			goto bad_proto;
 
 		stmt = __payload_gen_icmp_echo_dependency(ctx, expr,
@@ -1144,13 +1413,23 @@ int payload_gen_icmp_dependency(struct eval_ctx *ctx, const struct expr *expr,
 							  &icmp6_type_type,
 							  desc);
 		break;
+	case PROTO_ICMP6_ADDRESS:
+		if (icmp_dep_type_match(PROTO_ICMP6_ADDRESS,
+					pctx->th_dep.icmp.type))
+			goto done;
+		type = ND_NEIGHBOR_SOLICIT;
+		if (pctx->th_dep.icmp.type)
+			goto bad_proto;
+		stmt = __payload_gen_icmp6_addr_dependency(ctx, expr, desc);
+		break;
+	case PROTO_ICMP6_REDIRECT:
 	case PROTO_ICMP6_MTU:
 	case PROTO_ICMP6_MGMQ:
 	case PROTO_ICMP6_PPTR:
 		type = icmp_dep_to_type(tmpl->icmp_dep);
-		if (ctx->pctx.th_dep.icmp.type == type)
+		if (pctx->th_dep.icmp.type == type)
 			goto done;
-		if (ctx->pctx.th_dep.icmp.type)
+		if (pctx->th_dep.icmp.type)
 			goto bad_proto;
 		stmt = __payload_gen_icmp_simple_dependency(ctx, expr,
 							    &icmp6_type_type,
@@ -1161,7 +1440,7 @@ int payload_gen_icmp_dependency(struct eval_ctx *ctx, const struct expr *expr,
 		BUG("Unhandled icmp dependency code");
 	}
 
-	ctx->pctx.th_dep.icmp.type = type;
+	pctx->th_dep.icmp.type = type;
 
 	if (stmt_evaluate(ctx, stmt) < 0)
 		return expr_error(ctx->msgs, expr,
@@ -1172,5 +1451,44 @@ done:
 
 bad_proto:
 	return expr_error(ctx->msgs, expr, "incompatible icmp match: rule has %d, need %u",
-			  ctx->pctx.th_dep.icmp.type, type);
+			  pctx->th_dep.icmp.type, type);
+}
+
+int payload_gen_inner_dependency(struct eval_ctx *ctx, const struct expr *expr,
+				 struct stmt **res)
+{
+	struct proto_ctx *pctx = eval_proto_ctx(ctx);
+	const struct proto_hdr_template *tmpl;
+	const struct proto_desc *desc, *inner_desc;
+	struct expr *left, *right, *dep;
+	struct stmt *stmt = NULL;
+	int protocol;
+
+	assert(expr->etype == EXPR_PAYLOAD);
+
+	inner_desc = expr->payload.inner_desc;
+	desc = pctx->protocol[inner_desc->base - 1].desc;
+	if (desc == NULL)
+		desc = &proto_ip;
+
+	tmpl = &inner_desc->templates[0];
+	assert(tmpl);
+
+	protocol = proto_find_num(desc, inner_desc);
+	if (protocol < 0)
+                return expr_error(ctx->msgs, expr,
+                                  "conflicting protocols specified: %s vs. %s",
+                                  desc->name, inner_desc->name);
+
+	left = meta_expr_alloc(&expr->location, tmpl->meta_key);
+
+	right = constant_expr_alloc(&expr->location, tmpl->dtype,
+				    tmpl->dtype->byteorder, tmpl->len,
+				    constant_data_ptr(protocol, tmpl->len));
+
+	dep = relational_expr_alloc(&expr->location, OP_EQ, left, right);
+	stmt = expr_stmt_alloc(&dep->location, dep);
+
+	*res = stmt;
+	return 0;
 }

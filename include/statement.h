@@ -47,6 +47,13 @@ struct counter_stmt {
 
 extern struct stmt *counter_stmt_alloc(const struct location *loc);
 
+struct last_stmt {
+	uint64_t		used;
+	uint32_t		set;
+};
+
+extern struct stmt *last_stmt_alloc(const struct location *loc);
+
 struct exthdr_stmt {
 	struct expr			*expr;
 	struct expr			*val;
@@ -144,6 +151,12 @@ struct nat_stmt {
 
 extern struct stmt *nat_stmt_alloc(const struct location *loc,
 				   enum nft_nat_etypes type);
+
+struct optstrip_stmt {
+	struct expr	*expr;
+};
+
+extern struct stmt *optstrip_stmt_alloc(const struct location *loc, struct expr *e);
 
 struct tproxy_stmt {
 	struct expr	*addr;
@@ -249,8 +262,8 @@ enum nft_xt_type {
 	NFT_XT_MATCH = 0,
 	NFT_XT_TARGET,
 	NFT_XT_WATCHER,
-	NFT_XT_MAX
 };
+#define NFT_XT_MAX	(NFT_XT_WATCHER + 1)
 
 struct xtables_match;
 struct xtables_target;
@@ -258,12 +271,11 @@ struct xtables_target;
 struct xt_stmt {
 	const char			*name;
 	enum nft_xt_type		type;
+	uint32_t			rev;
+	uint32_t			family;
+	size_t				infolen;
+	void				*info;
 	uint32_t			proto;
-	union {
-		struct xtables_match	*match;
-		struct xtables_target	*target;
-	};
-	void				*entry;
 };
 
 extern struct stmt *xt_stmt_alloc(const struct location *loc);
@@ -297,6 +309,8 @@ extern struct stmt *xt_stmt_alloc(const struct location *loc);
  * @STMT_MAP:		map statement
  * @STMT_SYNPROXY:	synproxy statement
  * @STMT_CHAIN:		chain statement
+ * @STMT_OPTSTRIP:	optstrip statement
+ * @STMT_LAST:		last statement
  */
 enum stmt_types {
 	STMT_INVALID,
@@ -326,6 +340,8 @@ enum stmt_types {
 	STMT_MAP,
 	STMT_SYNPROXY,
 	STMT_CHAIN,
+	STMT_OPTSTRIP,
+	STMT_LAST,
 };
 
 /**
@@ -375,11 +391,13 @@ struct stmt {
 		struct counter_stmt	counter;
 		struct payload_stmt	payload;
 		struct meta_stmt	meta;
+		struct last_stmt	last;
 		struct log_stmt		log;
 		struct limit_stmt	limit;
 		struct reject_stmt	reject;
 		struct nat_stmt		nat;
 		struct tproxy_stmt	tproxy;
+		struct optstrip_stmt	optstrip;
 		struct queue_stmt	queue;
 		struct quota_stmt	quota;
 		struct ct_stmt		ct;

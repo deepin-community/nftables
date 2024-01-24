@@ -2,17 +2,17 @@
  * Copyright (c) 2015 Arturo Borrero Gonzalez <arturo@netfilter.org>
  *
  * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
+ * it under the terms of the GNU General Public License version 2 (or any
+ * later) as published by the Free Software Foundation.
  */
 
-#include <string.h>
+#include <nft.h>
+
 #include <fcntl.h>
 #include <errno.h>
 #include <libmnl/libmnl.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
-#include <stdlib.h>
 #include <inttypes.h>
 
 #include <libnftnl/table.h>
@@ -39,6 +39,13 @@
 #include <erec.h>
 #include <iface.h>
 #include <json.h>
+
+enum {
+	NFT_OF_EVENT_ADD,
+	NFT_OF_EVENT_INSERT,
+	NFT_OF_EVENT_DEL,
+	NFT_OF_EVENT_CREATE,
+};
 
 #define nft_mon_print(monh, ...) nft_print(&monh->ctx->nft->output, __VA_ARGS__)
 
@@ -120,17 +127,24 @@ struct nftnl_obj *netlink_obj_alloc(const struct nlmsghdr *nlh)
 	return nlo;
 }
 
-static uint32_t netlink_msg2nftnl_of(uint32_t msg)
+static uint32_t netlink_msg2nftnl_of(uint32_t type, uint16_t flags)
 {
-	switch (msg) {
+	switch (type) {
+	case NFT_MSG_NEWRULE:
+		if (flags & NLM_F_APPEND)
+			return NFT_OF_EVENT_ADD;
+		else
+			return NFT_OF_EVENT_INSERT;
 	case NFT_MSG_NEWTABLE:
 	case NFT_MSG_NEWCHAIN:
 	case NFT_MSG_NEWSET:
 	case NFT_MSG_NEWSETELEM:
-	case NFT_MSG_NEWRULE:
 	case NFT_MSG_NEWOBJ:
 	case NFT_MSG_NEWFLOWTABLE:
-		return NFTNL_OF_EVENT_NEW;
+		if (flags & NLM_F_EXCL)
+			return NFT_OF_EVENT_CREATE;
+		else
+			return NFT_OF_EVENT_ADD;
 	case NFT_MSG_DELTABLE:
 	case NFT_MSG_DELCHAIN:
 	case NFT_MSG_DELSET:
@@ -147,18 +161,22 @@ static uint32_t netlink_msg2nftnl_of(uint32_t msg)
 static const char *nftnl_of2cmd(uint32_t of)
 {
 	switch (of) {
-	case NFTNL_OF_EVENT_NEW:
+	case NFT_OF_EVENT_ADD:
 		return "add";
-	case NFTNL_OF_EVENT_DEL:
+	case NFT_OF_EVENT_CREATE:
+		return "create";
+	case NFT_OF_EVENT_INSERT:
+		return "insert";
+	case NFT_OF_EVENT_DEL:
 		return "delete";
 	default:
 		return "???";
 	}
 }
 
-static const char *netlink_msg2cmd(uint32_t msg)
+static const char *netlink_msg2cmd(uint32_t type, uint16_t flags)
 {
-	return nftnl_of2cmd(netlink_msg2nftnl_of(msg));
+	return nftnl_of2cmd(netlink_msg2nftnl_of(type, flags));
 }
 
 static void nlr_for_each_set(struct nftnl_rule *nlr,
@@ -206,7 +224,7 @@ static int netlink_events_table_cb(const struct nlmsghdr *nlh, int type,
 
 	nlt = netlink_table_alloc(nlh);
 	t = netlink_delinearize_table(monh->ctx, nlt);
-	cmd = netlink_msg2cmd(type);
+	cmd = netlink_msg2cmd(type, nlh->nlmsg_flags);
 
 	switch (monh->format) {
 	case NFTNL_OUTPUT_DEFAULT:
@@ -243,7 +261,7 @@ static int netlink_events_chain_cb(const struct nlmsghdr *nlh, int type,
 
 	nlc = netlink_chain_alloc(nlh);
 	c = netlink_delinearize_chain(monh->ctx, nlc);
-	cmd = netlink_msg2cmd(type);
+	cmd = netlink_msg2cmd(type, nlh->nlmsg_flags);
 
 	switch (monh->format) {
 	case NFTNL_OUTPUT_DEFAULT:
@@ -254,10 +272,13 @@ static int netlink_events_chain_cb(const struct nlmsghdr *nlh, int type,
 			chain_print_plain(c, &monh->ctx->nft->output);
 			break;
 		case NFT_MSG_DELCHAIN:
-			nft_mon_print(monh, "chain %s %s %s",
-				      family2str(c->handle.family),
-				      c->handle.table.name,
-				      c->handle.chain.name);
+			if (c->dev_array_len > 0)
+				chain_print_plain(c, &monh->ctx->nft->output);
+			else
+				nft_mon_print(monh, "chain %s %s %s",
+					      family2str(c->handle.family),
+					      c->handle.table.name,
+					      c->handle.chain.name);
 			break;
 		}
 		nft_mon_print(monh, "\n");
@@ -292,7 +313,7 @@ static int netlink_events_set_cb(const struct nlmsghdr *nlh, int type,
 		return MNL_CB_ERROR;
 	}
 	family = family2str(set->handle.family);
-	cmd = netlink_msg2cmd(type);
+	cmd = netlink_msg2cmd(type, nlh->nlmsg_flags);
 
 	switch (monh->format) {
 	case NFTNL_OUTPUT_DEFAULT:
@@ -394,7 +415,7 @@ static int netlink_events_setelem_cb(const struct nlmsghdr *nlh, int type,
 	table = nftnl_set_get_str(nls, NFTNL_SET_TABLE);
 	setname = nftnl_set_get_str(nls, NFTNL_SET_NAME);
 	family = nftnl_set_get_u32(nls, NFTNL_SET_FAMILY);
-	cmd = netlink_msg2cmd(type);
+	cmd = netlink_msg2cmd(type, nlh->nlmsg_flags);
 
 	set = set_lookup_global(family, table, setname, &monh->ctx->nft->cache);
 	if (set == NULL) {
@@ -410,6 +431,7 @@ static int netlink_events_setelem_cb(const struct nlmsghdr *nlh, int type,
 	 * used by named sets, so use a dummy set.
 	 */
 	dummyset = set_alloc(monh->loc);
+	handle_merge(&dummyset->handle, &set->handle);
 	dummyset->key = expr_clone(set->key);
 	if (set->data)
 		dummyset->data = expr_clone(set->data);
@@ -482,7 +504,7 @@ static int netlink_events_obj_cb(const struct nlmsghdr *nlh, int type,
 		return MNL_CB_ERROR;
 	}
 	family = family2str(obj->handle.family);
-	cmd = netlink_msg2cmd(type);
+	cmd = netlink_msg2cmd(type, nlh->nlmsg_flags);
 
 	switch (monh->format) {
 	case NFTNL_OUTPUT_DEFAULT:
@@ -515,8 +537,13 @@ static int netlink_events_obj_cb(const struct nlmsghdr *nlh, int type,
 
 static void rule_map_decompose_cb(struct set *s, void *data)
 {
-	if (set_is_interval(s->flags) && set_is_anonymous(s->flags))
+	if (!set_is_anonymous(s->flags))
+		return;
+
+	if (set_is_non_concat_range(s))
 		interval_map_decompose(s->init);
+	else if (set_is_interval(s->flags))
+		concat_range_aggregate(s->init);
 }
 
 static int netlink_events_rule_cb(const struct nlmsghdr *nlh, int type,
@@ -528,9 +555,13 @@ static int netlink_events_rule_cb(const struct nlmsghdr *nlh, int type,
 
 	nlr = netlink_rule_alloc(nlh);
 	r = netlink_delinearize_rule(monh->ctx, nlr);
+	if (!r) {
+		fprintf(stderr, "W: Received event for an unknown table.\n");
+		goto out_free_nlr;
+	}
 	nlr_for_each_set(nlr, rule_map_decompose_cb, NULL,
 			 &monh->ctx->nft->cache);
-	cmd = netlink_msg2cmd(type);
+	cmd = netlink_msg2cmd(type, nlh->nlmsg_flags);
 
 	switch (monh->format) {
 	case NFTNL_OUTPUT_DEFAULT:
@@ -541,7 +572,10 @@ static int netlink_events_rule_cb(const struct nlmsghdr *nlh, int type,
 			      family,
 			      r->handle.table.name,
 			      r->handle.chain.name);
-
+		if (r->handle.position.id) {
+			nft_mon_print(monh, "handle %" PRIu64" ",
+				      r->handle.position.id);
+		}
 		switch (type) {
 		case NFT_MSG_NEWRULE:
 			rule_print(r, &monh->ctx->nft->output);
@@ -561,6 +595,7 @@ static int netlink_events_rule_cb(const struct nlmsghdr *nlh, int type,
 		break;
 	}
 	rule_free(r);
+out_free_nlr:
 	nftnl_rule_free(nlr);
 	return MNL_CB_OK;
 }
@@ -612,6 +647,7 @@ static void netlink_events_cache_addset(struct netlink_mon_handler *monh,
 	memset(&set_tmpctx, 0, sizeof(set_tmpctx));
 	init_list_head(&set_tmpctx.list);
 	init_list_head(&msgs);
+	set_tmpctx.nft = monh->ctx->nft;
 	set_tmpctx.msgs = &msgs;
 
 	nls = netlink_set_alloc(nlh);

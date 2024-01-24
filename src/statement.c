@@ -8,12 +8,11 @@
  * Development of this code funded by Astaro AG (http://www.astaro.com/)
  */
 
+#include <nft.h>
+
 #include <stddef.h>
-#include <stdlib.h>
 #include <stdio.h>
-#include <stdint.h>
 #include <inttypes.h>
-#include <string.h>
 #include <syslog.h>
 #include <rule.h>
 
@@ -23,6 +22,7 @@
 #include <netinet/ip_icmp.h>
 #include <netinet/icmp6.h>
 #include <statement.h>
+#include <tcpopt.h>
 #include <utils.h>
 #include <list.h>
 #include <xt.h>
@@ -248,6 +248,37 @@ struct stmt *counter_stmt_alloc(const struct location *loc)
 	return stmt;
 }
 
+static void last_stmt_print(const struct stmt *stmt, struct output_ctx *octx)
+{
+	nft_print(octx, "last");
+
+	if (nft_output_stateless(octx))
+		return;
+
+	nft_print(octx, " used ");
+
+	if (stmt->last.set)
+		time_print(stmt->last.used, octx);
+	else
+		nft_print(octx, "never");
+}
+
+static const struct stmt_ops last_stmt_ops = {
+	.type		= STMT_LAST,
+	.name		= "last",
+	.print		= last_stmt_print,
+	.json		= last_stmt_json,
+};
+
+struct stmt *last_stmt_alloc(const struct location *loc)
+{
+	struct stmt *stmt;
+
+	stmt = stmt_alloc(loc, &last_stmt_ops);
+	stmt->flags |= STMT_F_STATEFUL;
+	return stmt;
+}
+
 static const char *objref_type[NFT_OBJECT_MAX + 1] = {
 	[NFT_OBJECT_COUNTER]	= "counter",
 	[NFT_OBJECT_QUOTA]	= "quota",
@@ -454,9 +485,7 @@ static void limit_stmt_print(const struct stmt *stmt, struct output_ctx *octx)
 		nft_print(octx, "limit rate %s%" PRIu64 "/%s",
 			  inv ? "over " : "", stmt->limit.rate,
 			  get_unit(stmt->limit.unit));
-		if (stmt->limit.burst && stmt->limit.burst != 5)
-			nft_print(octx, " burst %u packets",
-				  stmt->limit.burst);
+		nft_print(octx, " burst %u packets", stmt->limit.burst);
 		break;
 	case NFT_LIMIT_PKT_BYTES:
 		data_unit = get_rate(stmt->limit.rate, &rate);
@@ -464,7 +493,7 @@ static void limit_stmt_print(const struct stmt *stmt, struct output_ctx *octx)
 		nft_print(octx,	"limit rate %s%" PRIu64 " %s/%s",
 			  inv ? "over " : "", rate, data_unit,
 			  get_unit(stmt->limit.unit));
-		if (stmt->limit.burst != 5) {
+		if (stmt->limit.burst != 0) {
 			uint64_t burst;
 
 			data_unit = get_rate(stmt->limit.burst, &burst);
@@ -507,15 +536,10 @@ static void queue_stmt_print(const struct stmt *stmt, struct output_ctx *octx)
 		nft_print(octx, "%sfanout", delim);
 
 	if (e) {
-		if (e->etype == EXPR_VALUE || e->etype == EXPR_RANGE) {
-			nft_print(octx, " num ");
-			expr_print(stmt->queue.queue, octx);
-		} else {
-			nft_print(octx, " to ");
-			expr_print(stmt->queue.queue, octx);
-		}
+		nft_print(octx, " to ");
+		expr_print(stmt->queue.queue, octx);
 	} else {
-		nft_print(octx, " num 0");
+		nft_print(octx, " to 0");
 	}
 }
 
@@ -823,6 +847,7 @@ static const struct stmt_ops map_stmt_ops = {
 	.name		= "map",
 	.print		= map_stmt_print,
 	.destroy	= map_stmt_destroy,
+	.json		= map_stmt_json,
 };
 
 struct stmt *map_stmt_alloc(const struct location *loc)
@@ -914,6 +939,37 @@ struct stmt *fwd_stmt_alloc(const struct location *loc)
 	return stmt_alloc(loc, &fwd_stmt_ops);
 }
 
+static void optstrip_stmt_print(const struct stmt *stmt, struct output_ctx *octx)
+{
+	const struct expr *expr = stmt->optstrip.expr;
+
+	nft_print(octx, "reset ");
+	expr_print(expr, octx);
+}
+
+static void optstrip_stmt_destroy(struct stmt *stmt)
+{
+	expr_free(stmt->optstrip.expr);
+}
+
+static const struct stmt_ops optstrip_stmt_ops = {
+	.type		= STMT_OPTSTRIP,
+	.name		= "optstrip",
+	.print		= optstrip_stmt_print,
+	.json		= optstrip_stmt_json,
+	.destroy	= optstrip_stmt_destroy,
+};
+
+struct stmt *optstrip_stmt_alloc(const struct location *loc, struct expr *e)
+{
+	struct stmt *stmt = stmt_alloc(loc, &optstrip_stmt_ops);
+
+	e->exthdr.flags |= NFT_EXTHDR_F_PRESENT;
+	stmt->optstrip.expr = e;
+
+	return stmt;
+}
+
 static void tproxy_stmt_print(const struct stmt *stmt, struct output_ctx *octx)
 {
 	nft_print(octx, "tproxy");
@@ -970,6 +1026,7 @@ static const struct stmt_ops xt_stmt_ops = {
 	.name		= "xt",
 	.print		= xt_stmt_print,
 	.destroy	= xt_stmt_destroy,
+	.json		= xt_stmt_json,
 };
 
 struct stmt *xt_stmt_alloc(const struct location *loc)

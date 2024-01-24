@@ -2,8 +2,6 @@ include $(top_srcdir)/Make_global.am
 
 sbin_PROGRAMS = nft
 
-CLEANFILES = scanner.c parser_bison.c
-
 AM_CPPFLAGS = -I$(top_srcdir)/include
 AM_CPPFLAGS += -DDEFAULT_INCLUDE_PATH="\"${sysconfdir}\"" \
 		${LIBMNL_CFLAGS} ${LIBNFTNL_CFLAGS}
@@ -50,6 +48,7 @@ libnftables_la_SOURCES =			\
 		exthdr.c			\
 		fib.c				\
 		hash.c				\
+		intervals.c			\
 		ipopt.c				\
 		meta.c				\
 		rt.c				\
@@ -63,19 +62,22 @@ libnftables_la_SOURCES =			\
 		monitor.c			\
 		owner.c				\
 		segtree.c			\
-		rbtree.c			\
 		gmputil.c			\
 		utils.c				\
+		nftutils.c			\
+		nftutils.h			\
 		erec.c				\
 		mnl.c				\
 		iface.c				\
 		mergesort.c			\
+		optimize.c			\
 		osf.c				\
 		nfnl_osf.c			\
 		tcpopt.c			\
 		socket.c			\
 		print.c				\
 		sctp_chunk.c			\
+		dccpopt.c			\
 		libnftables.c			\
 		libnftables.map
 
@@ -86,13 +88,14 @@ libparser_la_CFLAGS = ${AM_CFLAGS} \
 		      -Wno-missing-prototypes \
 		      -Wno-missing-declarations \
 		      -Wno-implicit-function-declaration \
+		      -Wno-unused-but-set-variable \
 		      -Wno-nested-externs \
 		      -Wno-undef \
 		      -Wno-redundant-decls
 
 libnftables_la_LIBADD = ${LIBMNL_LIBS} ${LIBNFTNL_LIBS} libparser.la
 libnftables_la_LDFLAGS = -version-info ${libnftables_LIBVERSION} \
-			 --version-script=$(srcdir)/libnftables.map
+			 -Wl,--version-script=$(srcdir)/libnftables.map
 
 if BUILD_MINIGMP
 noinst_LTLIBRARIES += libminigmp.la

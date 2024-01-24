@@ -1,6 +1,15 @@
+/*
+ * Copyright (c) 2021 Pablo Neira Ayuso <pablo@netfilter.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 (or any
+ * later) as published by the Free Software Foundation.
+ */
+
+#include <nft.h>
+
 #include <stdio.h>
 #include <unistd.h>
-#include <stdlib.h>
 #include <sys/time.h>
 #include <time.h>
 #include <inttypes.h>
@@ -66,7 +75,7 @@ static char *portid2name(pid_t pid, uint32_t portid, unsigned long inode)
 			continue;
 
 		rl = readlink(procname, tmp, sizeof(tmp));
-		if (rl <= 0 || rl > (ssize_t)sizeof(tmp))
+		if (rl <= 0 || rl >= (ssize_t)sizeof(tmp))
 			continue;
 
 		tmp[rl] = 0;

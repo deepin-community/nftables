@@ -1,9 +1,10 @@
 :input;type filter hook input priority 0
 :ingress;type filter hook ingress device lo priority 0
+:egress;type filter hook egress device lo priority 0
 
 *ip;test-ip4;input
 *inet;test-inet;input
-*netdev;test-netdev;ingress
+*netdev;test-netdev;ingress,egress
 
 !w type ipv4_addr;ok
 !x type inet_proto;ok
@@ -50,6 +51,9 @@ ip saddr != @set33 drop;fail
 !set5 type ipv4_addr . ipv4_addr;ok
 ip saddr . ip daddr @set5 drop;ok
 add @set5 { ip saddr . ip daddr };ok
+
+!map1 type ipv4_addr . ipv4_addr : mark;ok
+add @map1 { ip saddr . ip daddr : meta mark };ok
 
 # test nested anonymous sets
 ip saddr { { 1.1.1.0, 3.3.3.0 }, 2.2.2.0 };ok;ip saddr { 1.1.1.0, 2.2.2.0, 3.3.3.0 }

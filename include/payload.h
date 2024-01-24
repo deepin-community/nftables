@@ -15,6 +15,8 @@ struct eval_ctx;
 struct stmt;
 extern int payload_gen_dependency(struct eval_ctx *ctx, const struct expr *expr,
 				  struct stmt **res);
+int payload_gen_inner_dependency(struct eval_ctx *ctx, const struct expr *expr,
+				 struct stmt **res);
 extern int payload_gen_icmp_dependency(struct eval_ctx *ctx,
 				       const struct expr *expr,
 				       struct stmt **res);
@@ -25,16 +27,14 @@ extern int exthdr_gen_dependency(struct eval_ctx *ctx, const struct expr *expr,
 /**
  * struct payload_dep_ctx - payload protocol dependency tracking
  *
- * @pbase: protocol base of last dependency match
  * @icmp_type: extra info for icmp(6) decoding
- * @pdep: last dependency match
  * @prev: previous statement
+ * @pdeps: last dependency match per protocol layer
  */
 struct payload_dep_ctx {
-	enum proto_bases	pbase:8;
-	uint8_t			icmp_type;
-	struct stmt		*pdep;
-	struct stmt		*prev;
+	uint8_t		icmp_type;
+	struct stmt	*prev;
+	struct stmt	*pdeps[PROTO_BASE_MAX + 1];
 };
 
 extern bool payload_is_known(const struct expr *expr);
@@ -47,7 +47,10 @@ extern void payload_dependency_store(struct payload_dep_ctx *ctx,
 				     enum proto_bases base);
 extern bool payload_dependency_exists(const struct payload_dep_ctx *ctx,
 				      enum proto_bases base);
-extern void payload_dependency_release(struct payload_dep_ctx *ctx);
+extern struct expr *payload_dependency_get(struct payload_dep_ctx *ctx,
+					   enum proto_bases base);
+extern void payload_dependency_release(struct payload_dep_ctx *ctx,
+				       enum proto_bases base);
 extern void payload_dependency_kill(struct payload_dep_ctx *ctx,
 				    struct expr *expr, unsigned int family);
 extern void exthdr_dependency_kill(struct payload_dep_ctx *ctx,
@@ -65,5 +68,7 @@ extern void payload_expr_complete(struct expr *expr,
 				  const struct proto_ctx *ctx);
 
 bool payload_expr_cmp(const struct expr *e1, const struct expr *e2);
+
+const struct proto_desc *find_proto_desc(const struct nftnl_udata *ud);
 
 #endif /* NFTABLES_PAYLOAD_H */

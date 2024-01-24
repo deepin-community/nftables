@@ -1,7 +1,6 @@
 #ifndef NFTABLES_EXPRESSION_H
 #define NFTABLES_EXPRESSION_H
 
-#include <stdbool.h>
 #include <gmputil.h>
 #include <linux/netfilter/nf_tables.h>
 
@@ -41,6 +40,10 @@
  * @EXPR_NUMGEN:	number generation expression
  * @EXPR_HASH:		hash expression
  * @EXPR_RT:		routing expression
+ * @EXPR_FIB		forward information base expression
+ * @EXPR_XFRM		XFRM (ipsec) expression
+ * @EXPR_SET_ELEM_CATCHALL catchall element expression
+ * @EXPR_FLAGCMP	flagcmp expression
  */
 enum expr_types {
 	EXPR_INVALID,
@@ -73,8 +76,9 @@ enum expr_types {
 	EXPR_XFRM,
 	EXPR_SET_ELEM_CATCHALL,
 	EXPR_FLAGCMP,
+
+	EXPR_MAX = EXPR_FLAGCMP
 };
-#define EXPR_MAX EXPR_XFRM
 
 enum ops {
 	OP_INVALID,
@@ -116,10 +120,15 @@ enum symbol_types {
  * @maxval:	expected maximum value
  */
 struct expr_ctx {
+	/* expr_ctx does not own the reference to dtype. The caller must ensure
+	 * the valid lifetime.
+	 */
 	const struct datatype	*dtype;
+
 	enum byteorder		byteorder;
 	unsigned int		len;
 	unsigned int		maxval;
+	const struct expr	*key;
 };
 
 static inline void __expr_set_context(struct expr_ctx *ctx,
@@ -131,6 +140,7 @@ static inline void __expr_set_context(struct expr_ctx *ctx,
 	ctx->byteorder	= byteorder;
 	ctx->len	= len;
 	ctx->maxval	= maxval;
+	ctx->key	= NULL;
 }
 
 static inline void expr_set_context(struct expr_ctx *ctx,
@@ -179,7 +189,7 @@ struct expr_ops {
 };
 
 const struct expr_ops *expr_ops(const struct expr *e);
-const struct expr_ops *expr_ops_by_type(enum expr_types etype);
+const struct expr_ops *expr_ops_by_type_u32(uint32_t value);
 
 /**
  * enum expr_flags
@@ -190,6 +200,7 @@ const struct expr_ops *expr_ops_by_type(enum expr_types etype);
  * @EXPR_F_INTERVAL_END:	set member ends an open interval
  * @EXPR_F_BOOLEAN:		expression is boolean (set by relational expr on LHS)
  * @EXPR_F_INTERVAL:		expression describes a interval
+ * @EXPR_F_KERNEL:		expression resides in the kernel
  */
 enum expr_flags {
 	EXPR_F_CONSTANT		= 0x1,
@@ -198,6 +209,8 @@ enum expr_flags {
 	EXPR_F_INTERVAL_END	= 0x8,
 	EXPR_F_BOOLEAN		= 0x10,
 	EXPR_F_INTERVAL		= 0x20,
+	EXPR_F_KERNEL		= 0x40,
+	EXPR_F_REMOVE		= 0x80,
 };
 
 #include <payload.h>
@@ -238,6 +251,7 @@ struct expr {
 	enum expr_types		etype:8;
 	enum ops		op:8;
 	unsigned int		len;
+	struct cmd		*cmd;
 
 	union {
 		struct {
@@ -305,6 +319,7 @@ struct expr {
 			/* EXPR_PAYLOAD */
 			const struct proto_desc		*desc;
 			const struct proto_hdr_template	*tmpl;
+			const struct proto_desc		*inner_desc;
 			enum proto_bases		base;
 			unsigned int			offset;
 			bool				is_raw;
@@ -323,6 +338,7 @@ struct expr {
 			/* EXPR_META */
 			enum nft_meta_keys	key;
 			enum proto_bases	base;
+			const struct proto_desc	*inner_desc;
 		} meta;
 		struct {
 			/* SOCKET */
@@ -475,6 +491,7 @@ extern struct expr *compound_expr_alloc(const struct location *loc,
 extern void compound_expr_add(struct expr *compound, struct expr *expr);
 extern void compound_expr_remove(struct expr *compound, struct expr *expr);
 extern void list_expr_sort(struct list_head *head);
+extern void list_splice_sorted(struct list_head *list, struct list_head *head);
 
 extern struct expr *concat_expr_alloc(const struct location *loc);
 
@@ -482,10 +499,6 @@ extern struct expr *list_expr_alloc(const struct location *loc);
 
 extern struct expr *set_expr_alloc(const struct location *loc,
 				   const struct set *set);
-extern int set_to_intervals(struct list_head *msgs, struct set *set,
-			    struct expr *init, bool add,
-			    unsigned int debug_mask, bool merge,
-			    struct output_ctx *octx);
 extern void concat_range_aggregate(struct expr *set);
 extern void interval_map_decompose(struct expr *set);
 
