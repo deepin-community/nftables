@@ -17,8 +17,7 @@ inet test-inet input
   [ meta load l4proto => reg 1 ]
   [ cmp eq reg 1 0x00000032 ]
   [ payload load 4b @ transport header + 0 => reg 1 ]
-  [ cmp gte reg 1 0x6f000000 ]
-  [ cmp lte reg 1 0xde000000 ]
+  [ range eq reg 1 0x6f000000 0xde000000 ]
 
 # esp spi != 111-222
 inet test-inet input
@@ -59,8 +58,7 @@ inet test-inet input
   [ meta load l4proto => reg 1 ]
   [ cmp eq reg 1 0x00000032 ]
   [ payload load 4b @ transport header + 4 => reg 1 ]
-  [ cmp gte reg 1 0x16000000 ]
-  [ cmp lte reg 1 0x18000000 ]
+  [ range eq reg 1 0x16000000 0x18000000 ]
 
 # esp sequence != 22-24
 inet test-inet input

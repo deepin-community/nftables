@@ -291,3 +291,35 @@
         }
     }
 ]
+
+# ct mark set ct mark | ip6 dscp | 0x200 counter
+[
+    {
+        "mangle": {
+            "key": {
+                "ct": {
+                    "key": "mark"
+                }
+            },
+            "value": {
+                "|": [
+                  {
+                    "ct": {
+                      "key": "mark"
+                    }
+                  },
+                  {
+                    "payload": {
+                      "protocol": "ip6",
+                      "field": "dscp"
+                    }
+                  },
+                  512
+                ]
+            }
+        }
+    },
+    {
+        "counter": null
+    }
+]

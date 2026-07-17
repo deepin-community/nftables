@@ -33,25 +33,28 @@
 #include <linux/netfilter/nf_log.h>
 #include <linux/netfilter/nf_synproxy.h>
 
-struct stmt *stmt_alloc(const struct location *loc,
-			const struct stmt_ops *ops)
+struct stmt *stmt_alloc(const struct location *loc, const struct stmt_ops *ops)
 {
 	struct stmt *stmt;
 
 	stmt = xzalloc(sizeof(*stmt));
 	init_list_head(&stmt->list);
 	stmt->location = *loc;
-	stmt->ops      = ops;
+	stmt->type = ops->type;
 	return stmt;
 }
 
 void stmt_free(struct stmt *stmt)
 {
+	const struct stmt_ops *ops;
+
 	if (stmt == NULL)
 		return;
-	if (stmt->ops->destroy)
-		stmt->ops->destroy(stmt);
-	xfree(stmt);
+
+	ops = stmt_ops(stmt);
+	if (ops->destroy)
+		ops->destroy(stmt);
+	free(stmt);
 }
 
 void stmt_list_free(struct list_head *list)
@@ -66,7 +69,9 @@ void stmt_list_free(struct list_head *list)
 
 void stmt_print(const struct stmt *stmt, struct output_ctx *octx)
 {
-	stmt->ops->print(stmt, octx);
+	const struct stmt_ops *ops = stmt_ops(stmt);
+
+	ops->print(stmt, octx);
 }
 
 static void expr_stmt_print(const struct stmt *stmt, struct output_ctx *octx)
@@ -183,7 +188,7 @@ static void meter_stmt_destroy(struct stmt *stmt)
 	expr_free(stmt->meter.key);
 	expr_free(stmt->meter.set);
 	stmt_free(stmt->meter.stmt);
-	xfree(stmt->meter.name);
+	free_const(stmt->meter.name);
 }
 
 static const struct stmt_ops meter_stmt_ops = {
@@ -377,12 +382,8 @@ int log_level_parse(const char *level)
 static void log_stmt_print(const struct stmt *stmt, struct output_ctx *octx)
 {
 	nft_print(octx, "log");
-	if (stmt->log.flags & STMT_LOG_PREFIX) {
-		char prefix[NF_LOG_PREFIXLEN] = {};
-
-		expr_to_string(stmt->log.prefix, prefix);
-		nft_print(octx, " prefix \"%s\"", prefix);
-	}
+	if (stmt->log.flags & STMT_LOG_PREFIX)
+		nft_print(octx, " prefix \"%s\"", stmt->log.prefix);
 	if (stmt->log.flags & STMT_LOG_GROUP)
 		nft_print(octx, " group %u", stmt->log.group);
 	if (stmt->log.flags & STMT_LOG_SNAPLEN)
@@ -419,7 +420,7 @@ static void log_stmt_print(const struct stmt *stmt, struct output_ctx *octx)
 
 static void log_stmt_destroy(struct stmt *stmt)
 {
-	expr_free(stmt->log.prefix);
+	free_const(stmt->log.prefix);
 }
 
 static const struct stmt_ops log_stmt_ops = {
@@ -989,7 +990,7 @@ static void tproxy_stmt_print(const struct stmt *stmt, struct output_ctx *octx)
 			expr_print(stmt->tproxy.addr, octx);
 		}
 	}
-	if (stmt->tproxy.port && stmt->tproxy.port->etype == EXPR_VALUE) {
+	if (stmt->tproxy.port) {
 		if (!stmt->tproxy.addr)
 			nft_print(octx, " ");
 		nft_print(octx, ":");
@@ -1082,4 +1083,60 @@ static const struct stmt_ops synproxy_stmt_ops = {
 struct stmt *synproxy_stmt_alloc(const struct location *loc)
 {
 	return stmt_alloc(loc, &synproxy_stmt_ops);
+}
+
+/* For src/optimize.c */
+static struct stmt_ops invalid_stmt_ops = {
+	.type	= STMT_INVALID,
+	.name	= "unsupported",
+};
+
+static const struct stmt_ops *__stmt_ops_by_type(enum stmt_types type)
+{
+	switch (type) {
+	case STMT_INVALID: return &invalid_stmt_ops;
+	case STMT_EXPRESSION: return &expr_stmt_ops;
+	case STMT_VERDICT: return &verdict_stmt_ops;
+	case STMT_METER: return &meter_stmt_ops;
+	case STMT_COUNTER: return &counter_stmt_ops;
+	case STMT_PAYLOAD: return &payload_stmt_ops;
+	case STMT_META: return &meta_stmt_ops;
+	case STMT_LIMIT: return &limit_stmt_ops;
+	case STMT_LOG: return &log_stmt_ops;
+	case STMT_REJECT: return &reject_stmt_ops;
+	case STMT_NAT: return &nat_stmt_ops;
+	case STMT_TPROXY: return &tproxy_stmt_ops;
+	case STMT_QUEUE: return &queue_stmt_ops;
+	case STMT_CT: return &ct_stmt_ops;
+	case STMT_SET: return &set_stmt_ops;
+	case STMT_DUP: return &dup_stmt_ops;
+	case STMT_FWD: return &fwd_stmt_ops;
+	case STMT_XT: return &xt_stmt_ops;
+	case STMT_QUOTA: return &quota_stmt_ops;
+	case STMT_NOTRACK: return &notrack_stmt_ops;
+	case STMT_OBJREF: return &objref_stmt_ops;
+	case STMT_EXTHDR: return &exthdr_stmt_ops;
+	case STMT_FLOW_OFFLOAD: return &flow_offload_stmt_ops;
+	case STMT_CONNLIMIT: return &connlimit_stmt_ops;
+	case STMT_MAP: return &map_stmt_ops;
+	case STMT_SYNPROXY: return &synproxy_stmt_ops;
+	case STMT_CHAIN: return &chain_stmt_ops;
+	case STMT_OPTSTRIP: return &optstrip_stmt_ops;
+	case STMT_LAST: return &last_stmt_ops;
+	default:
+		break;
+	}
+
+	return NULL;
+}
+
+const struct stmt_ops *stmt_ops(const struct stmt *stmt)
+{
+	const struct stmt_ops *ops;
+
+	ops = __stmt_ops_by_type(stmt->type);
+	if (!ops)
+		BUG("Unknown statement type %d\n", stmt->type);
+
+	return ops;
 }

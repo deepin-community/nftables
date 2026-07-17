@@ -6,5 +6,9 @@
 set -e
 $NFT add table t
 $NFT add chain t c
-$NFT add rule t c accept	# should have handle 2
-$NFT replace rule t c handle 2 drop
+$NFT 'add set t s1 { type ipv4_addr; }'
+$NFT 'add set t s2 { type ipv4_addr; flags interval; }'
+$NFT add rule t c accept        # should have handle 4
+$NFT replace rule t c handle 4 drop
+$NFT replace rule t c handle 4 ip saddr { 1.1.1.1, 2.2.2.2 }
+$NFT replace rule t c handle 4 ip saddr @s2 ip daddr { 3.3.3.3, 4.4.4.4 }

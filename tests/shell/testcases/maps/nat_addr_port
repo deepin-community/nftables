@@ -84,6 +84,11 @@ $NFT add rule 'ip6 ip6foo c ip6 saddr f0:0b::a3 dnat to [1c::3]:42' && exit 1
 # should fail: rule has no test for l4 protocol, but map has inet_service
 $NFT add rule 'ip6 ip6foo c dnat to ip daddr map @y' && exit 1
 
+if [ "$NFT_TEST_HAVE_inet_nat" = n ]; then
+	echo "Test partially skipped due to NFT_TEST_HAVE_inet_nat=n"
+	exit 77
+fi
+
 # skeleton inet
 $NFT -f /dev/stdin <<EOF || exit 1
 table inet inetfoo {

@@ -44,3 +44,15 @@ ip6 test-ip6 output
   [ bitwise reg 1 = ( reg 1 >> 0x00000006 ) ]
   [ bitwise reg 1 = ( reg 1 & 0x0000003c ) ^ 0x00000000 ]
   [ ct set mark with reg 1 ]
+
+# ct mark set ct mark | ip6 dscp | 0x200 counter
+ip6 test-ip6 output
+  [ ct load mark => reg 1 ]
+  [ payload load 2b @ network header + 0 => reg 2 ]
+  [ bitwise reg 2 = ( reg 2 & 0x0000c00f ) ^ 0x00000000 ]
+  [ byteorder reg 2 = ntoh(reg 2, 2, 2) ]
+  [ bitwise reg 2 = ( reg 2 >> 0x00000006 ) ]
+  [ bitwise reg 1 = ( reg 1 | reg 2 ) ]
+  [ bitwise reg 1 = ( reg 1 & 0xfffffdff ) ^ 0x00000200 ]
+  [ ct set mark with reg 1 ]
+  [ counter pkts 0 bytes 0 ]

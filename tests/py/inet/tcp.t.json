@@ -954,12 +954,12 @@
                         }
                     },
                     {
-                        "|": [ "fin", { "|": [ "syn", { "|": [ "rst", { "|": [ "psh", { "|": [ "ack", { "|": [ "urg", { "|": [ "ecn", "cwr" ] } ] } ] } ] } ] } ] } ]
+                        "|": [ "fin", "syn", "rst", "psh", "ack", "urg", "ecn", "cwr" ]
                     }
                 ]
             },
             "op": "==",
-            "right": { "|": [ "fin", { "|": [ "syn", { "|": [ "rst", { "|": [ "psh", { "|": [ "ack", { "|": [ "urg", { "|": [ "ecn", "cwr" ] } ] } ] } ] } ] } ] } ] }
+            "right": { "|": [ "fin", "syn", "rst", "psh", "ack", "urg", "ecn", "cwr" ] }
         }
     }
 ]
@@ -1370,13 +1370,13 @@
             "op": "==",
             "right": {
                 "set": [
+                    "syn",
                     {
                         "|": [
                             "syn",
                             "ack"
                         ]
-                    },
-                    "syn"
+                    }
                 ]
             }
         }
@@ -1395,56 +1395,16 @@
                             "protocol": "tcp"
                         }
                     },
-                    {
-                        "|": [
-                            {
-                                "|": [
-                                    {
-                                        "|": [
-                                            {
-                                                "|": [
-                                                    {
-                                                        "|": [
-                                                            "fin",
-                                                            "syn"
-                                                        ]
-                                                    },
-                                                    "rst"
-                                                ]
-                                            },
-                                            "psh"
-                                        ]
-                                    },
-                                    "ack"
-                                ]
-                            },
-                            "urg"
-                        ]
-                    }
+                    { "|": [ "fin", "syn", "rst", "psh", "ack", "urg" ] }
                 ]
             },
             "op": "==",
             "right": {
                 "set": [
-                    {
-                        "|": [
-                            {
-                                "|": [
-                                    "fin",
-                                    "psh"
-                                ]
-                            },
-                            "ack"
-                        ]
-                    },
                     "fin",
-                    {
-                        "|": [
-                            "psh",
-                            "ack"
-                        ]
-                    },
-                    "ack"
+                    "ack",
+                    { "|": [ "psh", "ack" ] },
+                    { "|": [ "fin", "psh", "ack" ] }
                 ]
             }
         }
@@ -1482,17 +1442,21 @@
                             "protocol": "tcp"
                         }
                     },
-                    [
-                        "fin",
-                        "syn"
-                    ]
+                    {
+                        "|": [
+                            "fin",
+                            "syn"
+                        ]
+                    }
                 ]
             },
             "op": "==",
-            "right": [
-                "fin",
-                "syn"
-            ]
+            "right": {
+                "|": [
+                    "fin",
+                    "syn"
+                ]
+            }
         }
     }
 ]
@@ -1509,10 +1473,12 @@
                             "protocol": "tcp"
                         }
                     },
-                    [
-                        "fin",
-                        "syn"
-                    ]
+                    {
+                        "|": [
+                            "fin",
+                            "syn"
+                        ]
+                    }
                 ]
             },
             "op": "!=",
@@ -1645,12 +1611,14 @@
                             "protocol": "tcp"
                         }
                     },
-                    [
-                        "fin",
-                        "syn",
-                        "rst",
-                        "ack"
-                    ]
+                    {
+                        "|": [
+                            "fin",
+                            "syn",
+                            "rst",
+                            "ack"
+                        ]
+                    }
                 ]
             },
             "op": "==",
@@ -1671,12 +1639,14 @@
                             "protocol": "tcp"
                         }
                     },
-                    [
-                        "fin",
-                        "syn",
-                        "rst",
-                        "ack"
-                    ]
+                    {
+                        "|": [
+                            "fin",
+                            "syn",
+                            "rst",
+                            "ack"
+                        ]
+                    }
                 ]
             },
             "op": "==",
@@ -1698,12 +1668,14 @@
                             "protocol": "tcp"
                         }
                     },
-                    [
-                        "fin",
-                        "syn",
-                        "rst",
-                        "ack"
-                    ]
+                    {
+                        "|": [
+                            "fin",
+                            "syn",
+                            "rst",
+                            "ack"
+                        ]
+                    }
                 ]
             },
             "op": "!=",
@@ -1712,7 +1684,7 @@
     }
 ]
 
-# tcp flags & (fin | syn | rst | ack) == (syn | ack)
+# tcp flags & (fin | syn | rst | ack) == syn | ack
 [
     {
         "match": {
@@ -1724,24 +1696,28 @@
                             "protocol": "tcp"
                         }
                     },
-                    [
-                        "fin",
-                        "syn",
-                        "rst",
-                        "ack"
-                    ]
+                    {
+                        "|": [
+                            "fin",
+                            "syn",
+                            "rst",
+                            "ack"
+                        ]
+                    }
                 ]
             },
             "op": "==",
-            "right": [
-                "syn",
-                "ack"
-            ]
+            "right": {
+                "|": [
+                    "syn",
+                    "ack"
+                ]
+            }
         }
     }
 ]
 
-# tcp flags & (fin | syn | rst | ack) != (syn | ack)
+# tcp flags & (syn | ack) == syn | ack
 [
     {
         "match": {
@@ -1753,46 +1729,47 @@
                             "protocol": "tcp"
                         }
                     },
-                    [
-                        "fin",
-                        "syn",
-                        "rst",
-                        "ack"
-                    ]
+                    {
+                        "|": [
+                            "syn",
+                            "ack"
+                        ]
+                    }
+                ]
+            },
+            "op": "==",
+            "right": {
+                "|": [
+                    "syn",
+                    "ack"
+                ]
+            }
+        }
+    }
+]
+
+# tcp flags & (fin | syn | rst | ack) != syn | ack
+[
+    {
+        "match": {
+            "left": {
+                "&": [
+                    {
+                        "payload": {
+                            "field": "flags",
+                            "protocol": "tcp"
+                        }
+                    },
+                    { "|": [ "fin", "syn", "rst", "ack" ] }
                 ]
             },
             "op": "!=",
-            "right": [
-                "syn",
-                "ack"
-            ]
-        }
-    }
-]
-
-# tcp flags & (syn | ack) == (syn | ack)
-[
-    {
-        "match": {
-            "left": {
-                "&": [
-                    {
-                        "payload": {
-                            "field": "flags",
-                            "protocol": "tcp"
-                        }
-                    },
-                    [
-                        "syn",
-                        "ack"
-                    ]
+            "right": {
+                "|": [
+                    "syn",
+                    "ack"
                 ]
-            },
-            "op": "==",
-            "right": [
-                "syn",
-                "ack"
-            ]
+            }
         }
     }
 ]

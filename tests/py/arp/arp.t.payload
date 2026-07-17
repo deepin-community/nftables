@@ -21,8 +21,7 @@ arp test-arp input
 # arp htype 33-45
 arp test-arp input
   [ payload load 2b @ network header + 0 => reg 1 ]
-  [ cmp gte reg 1 0x00002100 ]
-  [ cmp lte reg 1 0x00002d00 ]
+  [ range eq reg 1 0x00002100 0x00002d00 ]
 
 # arp htype != 33-45
 arp test-arp input
@@ -63,8 +62,7 @@ arp test-arp input
 # arp hlen 33-45
 arp test-arp input
   [ payload load 1b @ network header + 4 => reg 1 ]
-  [ cmp gte reg 1 0x00000021 ]
-  [ cmp lte reg 1 0x0000002d ]
+  [ range eq reg 1 0x00000021 0x0000002d ]
 
 # arp hlen != 33-45
 arp test-arp input
@@ -100,8 +98,7 @@ arp test-arp input
 # arp plen 33-45
 arp test-arp input
   [ payload load 1b @ network header + 5 => reg 1 ]
-  [ cmp gte reg 1 0x00000021 ]
-  [ cmp lte reg 1 0x0000002d ]
+  [ range eq reg 1 0x00000021 0x0000002d ]
 
 # arp plen != 33-45
 arp test-arp input
@@ -143,8 +140,7 @@ arp test-arp input
 # arp operation 1-2
 arp test-arp input
   [ payload load 2b @ network header + 6 => reg 1 ]
-  [ cmp gte reg 1 0x00000100 ]
-  [ cmp lte reg 1 0x00000200 ]
+  [ range eq reg 1 0x00000100 0x00000200 ]
 
 # arp operation request
 arp test-arp input

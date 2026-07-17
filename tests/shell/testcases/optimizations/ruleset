@@ -1,5 +1,8 @@
 #!/bin/bash
 
+# NFT_TEST_REQUIRES(NFT_TEST_HAVE_prerouting_reject)
+# NFT_TEST_REQUIRES(NFT_TEST_HAVE_inet_nat)
+
 RULESET="table inet uni {
 	chain gtfo {
 		reject with icmpx type host-unreachable

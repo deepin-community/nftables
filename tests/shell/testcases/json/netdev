@@ -26,3 +26,5 @@ if [ "$NFT_TEST_HAVE_json" = n ]; then
 	echo "Test partially skipped due to missing JSON support."
 	exit 77
 fi
+
+$NFT delete chain netdev test_table test_chain

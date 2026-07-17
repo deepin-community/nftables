@@ -236,6 +236,43 @@
     }
 ]
 
+# meta mark set ct mark and 0xffff0000 or meta mark and 0xffff
+[
+    {
+        "mangle": {
+            "key": {
+                "meta": {
+                    "key": "mark"
+                }
+            },
+            "value": {
+                "|": [
+                    {
+                        "&": [
+                            {
+                                "ct": {
+                                    "key": "mark"
+                                }
+                            },
+                            4294901760
+                        ]
+                    },
+                    {
+                        "&": [
+                            {
+                                "meta": {
+                                    "key": "mark"
+                                }
+                            },
+                            65535
+                        ]
+                    }
+                ]
+            }
+        }
+    }
+]
+
 # meta protocol ip udp dport 67
 [
     {
@@ -520,6 +557,47 @@
                         }
                     },
                     64
+                ]
+            }
+        }
+    }
+]
+
+# ip saddr . ether saddr . meta l4proto { 1.2.3.4 . aa:bb:cc:dd:ee:ff . 6 }
+[
+    {
+        "match": {
+            "left": {
+                "concat": [
+                    {
+                        "payload": {
+                            "field": "saddr",
+                            "protocol": "ip"
+                        }
+                    },
+                    {
+                        "payload": {
+                            "field": "saddr",
+                            "protocol": "ether"
+                        }
+                    },
+                    {
+                        "meta": {
+                            "key": "l4proto"
+                        }
+                    }
+                ]
+            },
+            "op": "==",
+            "right": {
+                "set": [
+                    {
+                        "concat": [
+                            "1.2.3.4",
+                            "aa:bb:cc:dd:ee:ff",
+                            "tcp"
+                        ]
+                    }
                 ]
             }
         }

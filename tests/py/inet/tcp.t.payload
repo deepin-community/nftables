@@ -17,8 +17,7 @@ inet test-inet input
   [ meta load l4proto => reg 1 ]
   [ cmp eq reg 1 0x00000006 ]
   [ payload load 2b @ transport header + 2 => reg 1 ]
-  [ cmp gte reg 1 0x00002100 ]
-  [ cmp lte reg 1 0x00002d00 ]
+  [ range eq reg 1 0x00002100 0x00002d00 ]
 
 # tcp dport != 33-45
 inet test-inet input
@@ -117,8 +116,7 @@ inet test-inet input
   [ meta load l4proto => reg 1 ]
   [ cmp eq reg 1 0x00000006 ]
   [ payload load 2b @ transport header + 0 => reg 1 ]
-  [ cmp gte reg 1 0x00002100 ]
-  [ cmp lte reg 1 0x00002d00 ]
+  [ range eq reg 1 0x00002100 0x00002d00 ]
 
 # tcp sport != 33-45
 inet test-inet input
@@ -223,8 +221,7 @@ inet test-inet input
   [ meta load l4proto => reg 1 ]
   [ cmp eq reg 1 0x00000006 ]
   [ payload load 4b @ transport header + 4 => reg 1 ]
-  [ cmp gte reg 1 0x21000000 ]
-  [ cmp lte reg 1 0x2d000000 ]
+  [ range eq reg 1 0x21000000 0x2d000000 ]
 
 # tcp sequence != 33-45
 inet test-inet input
@@ -280,8 +277,7 @@ inet test-inet input
   [ meta load l4proto => reg 1 ]
   [ cmp eq reg 1 0x00000006 ]
   [ payload load 4b @ transport header + 8 => reg 1 ]
-  [ cmp gte reg 1 0x21000000 ]
-  [ cmp lte reg 1 0x2d000000 ]
+  [ range eq reg 1 0x21000000 0x2d000000 ]
 
 # tcp ackseq != 33-45
 inet test-inet input
@@ -442,7 +438,7 @@ inet test-inet input
   [ bitwise reg 1 = ( reg 1 & 0x00000017 ) ^ 0x00000000 ]
   [ cmp neq reg 1 0x00000002 ]
 
-# tcp flags & (fin | syn | rst | ack) == (syn | ack)
+# tcp flags & (fin | syn | rst | ack) == syn | ack
 inet test-inet input
   [ meta load l4proto => reg 1 ]
   [ cmp eq reg 1 0x00000006 ]
@@ -450,7 +446,7 @@ inet test-inet input
   [ bitwise reg 1 = ( reg 1 & 0x00000017 ) ^ 0x00000000 ]
   [ cmp eq reg 1 0x00000012 ]
 
-# tcp flags & (fin | syn | rst | ack) != (syn | ack)
+# tcp flags & (fin | syn | rst | ack) != syn | ack
 inet test-inet input
   [ meta load l4proto => reg 1 ]
   [ cmp eq reg 1 0x00000006 ]
@@ -458,7 +454,7 @@ inet test-inet input
   [ bitwise reg 1 = ( reg 1 & 0x00000017 ) ^ 0x00000000 ]
   [ cmp neq reg 1 0x00000012 ]
 
-# tcp flags & (syn | ack) == (syn | ack)
+# tcp flags & (syn | ack) == syn | ack
 inet test-inet input
   [ meta load l4proto => reg 1 ]
   [ cmp eq reg 1 0x00000006 ]
@@ -500,8 +496,7 @@ inet test-inet input
   [ meta load l4proto => reg 1 ]
   [ cmp eq reg 1 0x00000006 ]
   [ payload load 2b @ transport header + 14 => reg 1 ]
-  [ cmp gte reg 1 0x00002100 ]
-  [ cmp lte reg 1 0x00002d00 ]
+  [ range eq reg 1 0x00002100 0x00002d00 ]
 
 # tcp window != 33-45
 inet test-inet input
@@ -549,8 +544,7 @@ inet test-inet input
   [ meta load l4proto => reg 1 ]
   [ cmp eq reg 1 0x00000006 ]
   [ payload load 2b @ transport header + 16 => reg 1 ]
-  [ cmp gte reg 1 0x00002100 ]
-  [ cmp lte reg 1 0x00002d00 ]
+  [ range eq reg 1 0x00002100 0x00002d00 ]
 
 # tcp checksum != 33-45
 inet test-inet input
@@ -606,8 +600,7 @@ inet test-inet input
   [ meta load l4proto => reg 1 ]
   [ cmp eq reg 1 0x00000006 ]
   [ payload load 2b @ transport header + 18 => reg 1 ]
-  [ cmp gte reg 1 0x00002100 ]
-  [ cmp lte reg 1 0x00002d00 ]
+  [ range eq reg 1 0x00002100 0x00002d00 ]
 
 # tcp urgptr != 33-45
 inet test-inet input

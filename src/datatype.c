@@ -123,6 +123,11 @@ void datatype_print(const struct expr *expr, struct output_ctx *octx)
 	    expr->dtype->name);
 }
 
+bool datatype_prefix_notation(const struct datatype *dtype)
+{
+	return dtype->type == TYPE_IPADDR || dtype->type == TYPE_IP6ADDR;
+}
+
 struct error_record *symbol_parse(struct parse_ctx *ctx, const struct expr *sym,
 				  struct expr **res)
 {
@@ -500,6 +505,24 @@ const struct datatype xinteger_type = {
 	.parse		= integer_type_parse,
 };
 
+static void queue_type_print(const struct expr *expr, struct output_ctx *octx)
+{
+	nft_gmp_print(octx, "queue");
+}
+
+/* Dummy queue_type for set declaration with typeof, see
+ * constant_expr_build_udata and constant_expr_parse_udata,
+ * basetype is used for elements.
+*/
+const struct datatype queue_type = {
+	.type		= TYPE_INTEGER,
+	.is_typeof	= 1,
+	.name		= "queue",
+	.desc		= "queue",
+	.basetype	= &integer_type,
+	.print		= queue_type_print,
+};
+
 static void string_type_print(const struct expr *expr, struct output_ctx *octx)
 {
 	unsigned int len = div_round_up(expr->len, BITS_PER_BYTE);
@@ -642,7 +665,6 @@ const struct datatype ipaddr_type = {
 	.basetype	= &integer_type,
 	.print		= ipaddr_type_print,
 	.parse		= ipaddr_type_parse,
-	.flags		= DTYPE_F_PREFIX,
 };
 
 static void ip6addr_type_print(const struct expr *expr, struct output_ctx *octx)
@@ -709,13 +731,13 @@ const struct datatype ip6addr_type = {
 	.basetype	= &integer_type,
 	.print		= ip6addr_type_print,
 	.parse		= ip6addr_type_parse,
-	.flags		= DTYPE_F_PREFIX,
 };
 
 static void inet_protocol_type_print(const struct expr *expr,
 				      struct output_ctx *octx)
 {
-	if (!nft_output_numeric_proto(octx)) {
+	if (!nft_output_numeric_proto(octx) &&
+	    mpz_cmp_ui(expr->value, UINT8_MAX) <= 0) {
 		char name[NFT_PROTONAME_MAXSIZE];
 
 		if (nft_getprotobynumber(mpz_get_uint8(expr->value), name, sizeof(name))) {
@@ -796,7 +818,8 @@ static void inet_service_print(const struct expr *expr, struct output_ctx *octx)
 
 void inet_service_type_print(const struct expr *expr, struct output_ctx *octx)
 {
-	if (nft_output_service(octx)) {
+	if (nft_output_service(octx) &&
+	    mpz_cmp_ui(expr->value, UINT16_MAX) <= 0) {
 		inet_service_print(expr, octx);
 		return;
 	}
@@ -855,19 +878,48 @@ const struct datatype inet_service_type = {
 
 #define RT_SYM_TAB_INITIAL_SIZE		16
 
+static FILE *open_iproute2_db(const char *filename, char **path)
+{
+	FILE *ret;
+
+	if (filename[0] == '/')
+		return fopen(filename, "r");
+
+	if (asprintf(path, "/etc/iproute2/%s", filename) == -1)
+		goto fail;
+
+	ret = fopen(*path, "r");
+	if (ret)
+		return ret;
+
+	free(*path);
+	if (asprintf(path, "/usr/share/iproute2/%s", filename) == -1)
+		goto fail;
+
+	ret = fopen(*path, "r");
+	if (ret)
+		return ret;
+
+	free(*path);
+fail:
+	*path = NULL;
+	return NULL;
+}
+
 struct symbol_table *rt_symbol_table_init(const char *filename)
 {
+	char buf[512], namebuf[512], *p, *path = NULL;
 	struct symbolic_constant s;
 	struct symbol_table *tbl;
 	unsigned int size, nelems, val;
-	char buf[512], namebuf[512], *p;
 	FILE *f;
 
 	size = RT_SYM_TAB_INITIAL_SIZE;
 	tbl = xmalloc(sizeof(*tbl) + size * sizeof(s));
+	tbl->base = BASE_DECIMAL;
 	nelems = 0;
 
-	f = fopen(filename, "r");
+	f = open_iproute2_db(filename, &path);
 	if (f == NULL)
 		goto out;
 
@@ -877,12 +929,15 @@ struct symbol_table *rt_symbol_table_init(const char *filename)
 			p++;
 		if (*p == '#' || *p == '\n' || *p == '\0')
 			continue;
-		if (sscanf(p, "0x%x %511s\n", &val, namebuf) != 2 &&
-		    sscanf(p, "0x%x %511s #", &val, namebuf) != 2 &&
-		    sscanf(p, "%u %511s\n", &val, namebuf) != 2 &&
-		    sscanf(p, "%u %511s #", &val, namebuf) != 2) {
+		if (sscanf(p, "0x%x %511s\n", &val, namebuf) == 2 ||
+		    sscanf(p, "0x%x %511s #", &val, namebuf) == 2) {
+			tbl->base = BASE_HEXADECIMAL;
+		} else if (sscanf(p, "%u %511s\n", &val, namebuf) == 2 ||
+			   sscanf(p, "%u %511s #", &val, namebuf) == 2) {
+			tbl->base = BASE_DECIMAL;
+		} else {
 			fprintf(stderr, "iproute database '%s' corrupted\n",
-				filename);
+				path ?: filename);
 			break;
 		}
 
@@ -899,6 +954,8 @@ struct symbol_table *rt_symbol_table_init(const char *filename)
 
 	fclose(f);
 out:
+	if (path)
+		free(path);
 	tbl->symbols[nelems] = SYMBOL_LIST_END;
 	return tbl;
 }
@@ -908,13 +965,40 @@ void rt_symbol_table_free(const struct symbol_table *tbl)
 	const struct symbolic_constant *s;
 
 	for (s = tbl->symbols; s->identifier != NULL; s++)
-		xfree(s->identifier);
-	xfree(tbl);
+		free_const(s->identifier);
+	free_const(tbl);
+}
+
+void rt_symbol_table_describe(struct output_ctx *octx, const char *name,
+			      const struct symbol_table *tbl,
+			      const struct datatype *type)
+{
+	char *path = NULL;
+	FILE *f;
+
+	if (!tbl || !tbl->symbols[0].identifier)
+		return;
+
+	f = open_iproute2_db(name, &path);
+	if (f)
+		fclose(f);
+	if (!path && asprintf(&path, "%s%s",
+			      name[0] == '/' ? "" : "unknown location of ",
+			      name) < 0)
+		return;
+
+	nft_print(octx, "\npre-defined symbolic constants from %s ", path);
+	if (tbl->base == BASE_DECIMAL)
+		nft_print(octx, "(in decimal):\n");
+	else
+		nft_print(octx, "(in hexadecimal):\n");
+	symbol_table_print(tbl, type, type->byteorder, octx);
+	free(path);
 }
 
 void mark_table_init(struct nft_ctx *ctx)
 {
-	ctx->output.tbl.mark = rt_symbol_table_init("/etc/iproute2/rt_marks");
+	ctx->output.tbl.mark = rt_symbol_table_init("rt_marks");
 }
 
 void mark_table_exit(struct nft_ctx *ctx)
@@ -934,10 +1018,17 @@ static struct error_record *mark_type_parse(struct parse_ctx *ctx,
 	return symbolic_constant_parse(ctx, sym, ctx->tbl->mark, res);
 }
 
+static void mark_type_describe(struct output_ctx *octx)
+{
+	rt_symbol_table_describe(octx, "rt_marks",
+				 octx->tbl.mark, &mark_type);
+}
+
 const struct datatype mark_type = {
 	.type		= TYPE_MARK,
 	.name		= "mark",
 	.desc		= "packet mark",
+	.describe	= mark_type_describe,
 	.size		= 4 * BITS_PER_BYTE,
 	.byteorder	= BYTEORDER_HOST_ENDIAN,
 	.basetype	= &integer_type,
@@ -945,9 +1036,9 @@ const struct datatype mark_type = {
 	.print		= mark_type_print,
 	.json		= mark_type_json,
 	.parse		= mark_type_parse,
-	.flags		= DTYPE_F_PREFIX,
 };
 
+/* symbol table for private datatypes for reject statement. */
 static const struct symbol_table icmp_code_tbl = {
 	.base		= BASE_DECIMAL,
 	.symbols	= {
@@ -963,16 +1054,17 @@ static const struct symbol_table icmp_code_tbl = {
 	},
 };
 
-const struct datatype icmp_code_type = {
-	.type		= TYPE_ICMP_CODE,
+/* private datatype for reject statement. */
+const struct datatype reject_icmp_code_type = {
 	.name		= "icmp_code",
-	.desc		= "icmp code",
+	.desc		= "reject icmp code",
 	.size		= BITS_PER_BYTE,
 	.byteorder	= BYTEORDER_BIG_ENDIAN,
 	.basetype	= &integer_type,
 	.sym_tbl	= &icmp_code_tbl,
 };
 
+/* symbol table for private datatypes for reject statement. */
 static const struct symbol_table icmpv6_code_tbl = {
 	.base		= BASE_DECIMAL,
 	.symbols	= {
@@ -986,16 +1078,17 @@ static const struct symbol_table icmpv6_code_tbl = {
 	},
 };
 
-const struct datatype icmpv6_code_type = {
-	.type		= TYPE_ICMPV6_CODE,
+/* private datatype for reject statement. */
+const struct datatype reject_icmpv6_code_type = {
 	.name		= "icmpv6_code",
-	.desc		= "icmpv6 code",
+	.desc		= "reject icmpv6 code",
 	.size		= BITS_PER_BYTE,
 	.byteorder	= BYTEORDER_BIG_ENDIAN,
 	.basetype	= &integer_type,
 	.sym_tbl	= &icmpv6_code_tbl,
 };
 
+/* symbol table for private datatypes for reject statement. */
 static const struct symbol_table icmpx_code_tbl = {
 	.base		= BASE_DECIMAL,
 	.symbols	= {
@@ -1007,6 +1100,60 @@ static const struct symbol_table icmpx_code_tbl = {
 	},
 };
 
+/* private datatype for reject statement. */
+const struct datatype reject_icmpx_code_type = {
+	.name		= "icmpx_code",
+	.desc		= "reject icmpx code",
+	.size		= BITS_PER_BYTE,
+	.byteorder	= BYTEORDER_BIG_ENDIAN,
+	.basetype	= &integer_type,
+	.sym_tbl	= &icmpx_code_tbl,
+};
+
+/* Backward compatible parser for the reject statement. */
+static struct error_record *icmp_code_parse(struct parse_ctx *ctx,
+					    const struct expr *sym,
+					    struct expr **res)
+{
+	return symbolic_constant_parse(ctx, sym, &icmp_code_tbl, res);
+}
+
+const struct datatype icmp_code_type = {
+	.type		= TYPE_ICMP_CODE,
+	.name		= "icmp_code",
+	.desc		= "icmp code",
+	.size		= BITS_PER_BYTE,
+	.byteorder	= BYTEORDER_BIG_ENDIAN,
+	.basetype	= &integer_type,
+	.parse		= icmp_code_parse,
+};
+
+/* Backward compatible parser for the reject statement. */
+static struct error_record *icmpv6_code_parse(struct parse_ctx *ctx,
+					      const struct expr *sym,
+					      struct expr **res)
+{
+	return symbolic_constant_parse(ctx, sym, &icmpv6_code_tbl, res);
+}
+
+const struct datatype icmpv6_code_type = {
+	.type		= TYPE_ICMPV6_CODE,
+	.name		= "icmpv6_code",
+	.desc		= "icmpv6 code",
+	.size		= BITS_PER_BYTE,
+	.byteorder	= BYTEORDER_BIG_ENDIAN,
+	.basetype	= &integer_type,
+	.parse		= icmpv6_code_parse,
+};
+
+/* Backward compatible parser for the reject statement. */
+static struct error_record *icmpx_code_parse(struct parse_ctx *ctx,
+					     const struct expr *sym,
+					     struct expr **res)
+{
+	return symbolic_constant_parse(ctx, sym, &icmpx_code_tbl, res);
+}
+
 const struct datatype icmpx_code_type = {
 	.type		= TYPE_ICMPX_CODE,
 	.name		= "icmpx_code",
@@ -1014,12 +1161,13 @@ const struct datatype icmpx_code_type = {
 	.size		= BITS_PER_BYTE,
 	.byteorder	= BYTEORDER_BIG_ENDIAN,
 	.basetype	= &integer_type,
-	.sym_tbl	= &icmpx_code_tbl,
+	.parse		= icmpx_code_parse,
 };
 
 void time_print(uint64_t ms, struct output_ctx *octx)
 {
 	uint64_t days, hours, minutes, seconds;
+	bool printed = false;
 
 	if (nft_output_seconds(octx)) {
 		nft_print(octx, "%" PRIu64 "s", ms / 1000);
@@ -1038,16 +1186,29 @@ void time_print(uint64_t ms, struct output_ctx *octx)
 	seconds = ms / 1000;
 	ms %= 1000;
 
-	if (days > 0)
+	if (days > 0) {
 		nft_print(octx, "%" PRIu64 "d", days);
-	if (hours > 0)
+		printed = true;
+	}
+	if (hours > 0) {
 		nft_print(octx, "%" PRIu64 "h", hours);
-	if (minutes > 0)
+		printed = true;
+	}
+	if (minutes > 0) {
 		nft_print(octx, "%" PRIu64 "m", minutes);
-	if (seconds > 0)
+		printed = true;
+	}
+	if (seconds > 0) {
 		nft_print(octx, "%" PRIu64 "s", seconds);
-	if (ms > 0)
+		printed = true;
+	}
+	if (ms > 0) {
 		nft_print(octx, "%" PRIu64 "ms", ms);
+		printed = true;
+	}
+
+	if (!printed)
+		nft_print(octx, "0s");
 }
 
 enum {
@@ -1204,7 +1365,7 @@ static struct datatype *datatype_alloc(void)
 	struct datatype *dtype;
 
 	dtype = xzalloc(sizeof(*dtype));
-	dtype->flags = DTYPE_F_ALLOC;
+	dtype->alloc = 1;
 	dtype->refcnt = 1;
 
 	return dtype;
@@ -1216,7 +1377,7 @@ const struct datatype *datatype_get(const struct datatype *ptr)
 
 	if (!dtype)
 		return NULL;
-	if (!(dtype->flags & DTYPE_F_ALLOC))
+	if (!dtype->alloc)
 		return dtype;
 
 	dtype->refcnt++;
@@ -1246,7 +1407,7 @@ struct datatype *datatype_clone(const struct datatype *orig_dtype)
 	*dtype = *orig_dtype;
 	dtype->name = xstrdup(orig_dtype->name);
 	dtype->desc = xstrdup(orig_dtype->desc);
-	dtype->flags = DTYPE_F_ALLOC | orig_dtype->flags;
+	dtype->alloc = 1;
 	dtype->refcnt = 1;
 
 	return dtype;
@@ -1258,7 +1419,7 @@ void datatype_free(const struct datatype *ptr)
 
 	if (!dtype)
 		return;
-	if (!(dtype->flags & DTYPE_F_ALLOC))
+	if (!dtype->alloc)
 		return;
 
 	assert(dtype->refcnt != 0);
@@ -1266,9 +1427,9 @@ void datatype_free(const struct datatype *ptr)
 	if (--dtype->refcnt > 0)
 		return;
 
-	xfree(dtype->name);
-	xfree(dtype->desc);
-	xfree(dtype);
+	free_const(dtype->name);
+	free_const(dtype->desc);
+	free(dtype);
 }
 
 const struct datatype *concat_type_alloc(uint32_t type)
@@ -1337,7 +1498,7 @@ static struct error_record *time_unit_parse(const struct location *loc,
 	else if (strcmp(str, "week") == 0)
 		*unit = 1ULL * 60 * 60 * 24 * 7;
 	else
-		return error(loc, "Wrong rate format");
+		return error(loc, "Wrong time format, expecting second, minute, hour, day or week");
 
 	return NULL;
 }
@@ -1345,14 +1506,14 @@ static struct error_record *time_unit_parse(const struct location *loc,
 struct error_record *data_unit_parse(const struct location *loc,
 				     const char *str, uint64_t *rate)
 {
-	if (strncmp(str, "bytes", strlen("bytes")) == 0)
+	if (strcmp(str, "bytes") == 0)
 		*rate = 1ULL;
-	else if (strncmp(str, "kbytes", strlen("kbytes")) == 0)
+	else if (strcmp(str, "kbytes") == 0)
 		*rate = 1024;
-	else if (strncmp(str, "mbytes", strlen("mbytes")) == 0)
+	else if (strcmp(str, "mbytes") == 0)
 		*rate = 1024 * 1024;
 	else
-		return error(loc, "Wrong rate format");
+		return error(loc, "Wrong unit format, expecting bytes, kbytes or mbytes");
 
 	return NULL;
 }
@@ -1360,14 +1521,20 @@ struct error_record *data_unit_parse(const struct location *loc,
 struct error_record *rate_parse(const struct location *loc, const char *str,
 				uint64_t *rate, uint64_t *unit)
 {
+	const char *slash, *rate_str;
 	struct error_record *erec;
-	const char *slash;
 
 	slash = strchr(str, '/');
 	if (!slash)
-		return error(loc, "wrong rate format");
+		return error(loc, "wrong rate format, expecting {bytes,kbytes,mbytes}/{second,minute,hour,day,week}");
 
-	erec = data_unit_parse(loc, str, rate);
+	rate_str = strndup(str, slash - str);
+	if (!rate_str)
+		memory_allocation_error();
+
+	erec = data_unit_parse(loc, rate_str, rate);
+	free_const(rate_str);
+
 	if (erec != NULL)
 		return erec;
 
@@ -1387,11 +1554,35 @@ static const struct symbol_table boolean_tbl = {
 	},
 };
 
+static struct error_record *boolean_type_parse(struct parse_ctx *ctx,
+					       const struct expr *sym,
+					       struct expr **res)
+{
+	struct error_record *erec;
+	int num;
+
+	erec = integer_type_parse(ctx, sym, res);
+	if (erec)
+		return erec;
+
+	if (mpz_cmp_ui((*res)->value, 0))
+		num = 1;
+	else
+		num = 0;
+
+	expr_free(*res);
+
+	*res = constant_expr_alloc(&sym->location, &boolean_type,
+				   BYTEORDER_HOST_ENDIAN, 1, &num);
+	return NULL;
+}
+
 const struct datatype boolean_type = {
 	.type		= TYPE_BOOLEAN,
 	.name		= "boolean",
 	.desc		= "boolean type",
 	.size		= 1,
+	.parse		= boolean_type_parse,
 	.basetype	= &integer_type,
 	.sym_tbl	= &boolean_tbl,
 	.json		= boolean_type_json,
@@ -1465,10 +1656,10 @@ const struct datatype policy_type = {
 
 #define SYSFS_CGROUPSV2_PATH	"/sys/fs/cgroup"
 
-static const char *cgroupv2_get_path(const char *path, uint64_t id)
+static char *cgroupv2_get_path(const char *path, uint64_t id)
 {
-	const char *cgroup_path = NULL;
 	char dent_name[PATH_MAX + 1];
+	char *cgroup_path = NULL;
 	struct dirent *dent;
 	struct stat st;
 	DIR *d;
@@ -1506,7 +1697,7 @@ static void cgroupv2_type_print(const struct expr *expr,
 				struct output_ctx *octx)
 {
 	uint64_t id = mpz_get_uint64(expr->value);
-	const char *cgroup_path;
+	char *cgroup_path;
 
 	cgroup_path = cgroupv2_get_path(SYSFS_CGROUPSV2_PATH, id);
 	if (cgroup_path)
@@ -1515,7 +1706,7 @@ static void cgroupv2_type_print(const struct expr *expr,
 	else
 		nft_print(octx, "%" PRIu64, id);
 
-	xfree(cgroup_path);
+	free(cgroup_path);
 }
 
 static struct error_record *cgroupv2_type_parse(struct parse_ctx *ctx,

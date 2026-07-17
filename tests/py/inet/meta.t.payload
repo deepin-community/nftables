@@ -80,6 +80,15 @@ inet test-inet input
   [ bitwise reg 1 = ( reg 1 >> 0x00000008 ) ]
   [ meta set mark with reg 1 ]
 
+# meta mark set ct mark and 0xffff0000 or meta mark and 0xffff
+inet test-inet input
+  [ ct load mark => reg 1 ]
+  [ bitwise reg 1 = ( reg 1 & 0xffff0000 ) ^ 0x00000000 ]
+  [ meta load mark => reg 2 ]
+  [ bitwise reg 2 = ( reg 2 & 0x0000ffff ) ^ 0x00000000 ]
+  [ bitwise reg 1 = ( reg 1 | reg 2 ) ]
+  [ meta set mark with reg 1 ]
+
 # meta protocol ip udp dport 67
 inet test-inet input
   [ meta load protocol => reg 1 ]
@@ -172,4 +181,18 @@ inet test-inet input
   [ bitwise reg 1 = ( reg 1 >> 0x00000006 ) ]
   [ bitwise reg 1 = ( reg 1 & 0xffffffbf ) ^ 0x00000040 ]
   [ meta set mark with reg 1 ]
+
+# ip saddr . ether saddr . meta l4proto { 1.2.3.4 . aa:bb:cc:dd:ee:ff . 6 }
+__set%d test-inet 3 size 1
+__set%d test-inet 0
+	element 04030201 ddccbbaa 0000ffee 00000006  : 0 [end]
+inet test-inet input
+  [ meta load nfproto => reg 1 ]
+  [ cmp eq reg 1 0x00000002 ]
+  [ meta load iiftype => reg 1 ]
+  [ cmp eq reg 1 0x00000001 ]
+  [ payload load 4b @ network header + 12 => reg 1 ]
+  [ payload load 6b @ link header + 6 => reg 9 ]
+  [ meta load l4proto => reg 11 ]
+  [ lookup reg 1 set __set%d ]
 

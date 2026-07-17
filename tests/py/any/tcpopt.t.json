@@ -192,7 +192,7 @@
             "left": {
                 "tcp option": {
                     "field": "left",
-                    "name": "sack"
+                    "name": "sack0"
                 }
             },
             "op": "==",
@@ -272,7 +272,7 @@
             "left": {
                 "tcp option": {
                     "field": "right",
-                    "name": "sack"
+                    "name": "sack0"
                 }
             },
             "op": "==",
@@ -533,7 +533,7 @@
     }
 ]
 
-# tcp option mptcp subtype 0
+# tcp option mptcp subtype mp-capable
 [
     {
         "match": {
@@ -544,7 +544,7 @@
                 }
             },
             "op": "==",
-            "right": 0
+            "right": "mp-capable"
         }
     }
 ]
@@ -560,12 +560,12 @@
                 }
             },
             "op": "==",
-            "right": 1
+            "right": "mp-join"
         }
     }
 ]
 
-# tcp option mptcp subtype { 0, 2}
+# tcp option mptcp subtype { mp-capable, mp-join, remove-addr, mp-prio, mp-fail, mp-fastclose, mp-tcprst }
 [
     {
         "match": {
@@ -578,12 +578,94 @@
             "op": "==",
             "right": {
                 "set": [
-                    0,
-                    2
+                    "mp-capable",
+                    "mp-join",
+                    "remove-addr",
+                    "mp-prio",
+                    "mp-fail",
+                    "mp-fastclose",
+                    "mp-tcprst"
                 ]
             }
         }
    }
+]
+
+# tcp option mptcp subtype . tcp dport { mp-capable . 10, mp-join . 100, add-addr . 200, remove-addr . 300, mp-prio . 400, mp-fail . 500, mp-fastclose . 600, mp-tcprst . 700 }
+[
+    {
+        "match": {
+            "left": {
+                "concat": [
+                    {
+                        "tcp option": {
+                            "field": "subtype",
+                            "name": "mptcp"
+                        }
+                    },
+                    {
+                        "payload": {
+                            "field": "dport",
+                            "protocol": "tcp"
+                        }
+                    }
+                ]
+            },
+            "op": "==",
+            "right": {
+                "set": [
+                    {
+                        "concat": [
+                            "mp-capable",
+                            10
+                        ]
+                    },
+                    {
+                        "concat": [
+                            "remove-addr",
+                            300
+                        ]
+                    },
+                    {
+                        "concat": [
+                            "mp-fastclose",
+                            600
+                        ]
+                    },
+                    {
+                        "concat": [
+                            "mp-join",
+                            100
+                        ]
+                    },
+                    {
+                        "concat": [
+                            "mp-prio",
+                            400
+                        ]
+                    },
+                    {
+                        "concat": [
+                            "mp-tcprst",
+                            700
+                        ]
+                    },
+                    {
+                        "concat": [
+                            "add-addr",
+                            200
+                        ]
+                    },
+                    {
+                        "concat": [
+                            "mp-fail",
+                            500
+                        ]
+                    }
+                ]
+            }
+        }
+    }
 ]
 
 # reset tcp option mptcp

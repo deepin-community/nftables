@@ -11,6 +11,10 @@
 #include <json.h>
 #include <libnftnl/udata.h>
 
+#define NFT_MAX_EXPR_LEN_BYTES (NFT_REG32_COUNT * sizeof(uint32_t))
+#define NFT_MAX_EXPR_LEN_BITS  (NFT_MAX_EXPR_LEN_BYTES * BITS_PER_BYTE)
+#define NFT_MAX_EXPR_RECURSION 16
+
 /**
  * enum expr_types
  *
@@ -43,7 +47,8 @@
  * @EXPR_FIB		forward information base expression
  * @EXPR_XFRM		XFRM (ipsec) expression
  * @EXPR_SET_ELEM_CATCHALL catchall element expression
- * @EXPR_FLAGCMP	flagcmp expression
+ * @EXPR_RANGE_VALUE	constant range expression
+ * @EXPR_RANGE_SYMBOL	unparse symbol range expression
  */
 enum expr_types {
 	EXPR_INVALID,
@@ -75,10 +80,11 @@ enum expr_types {
 	EXPR_FIB,
 	EXPR_XFRM,
 	EXPR_SET_ELEM_CATCHALL,
-	EXPR_FLAGCMP,
-
-	EXPR_MAX = EXPR_FLAGCMP
+	EXPR_RANGE_VALUE,
+	EXPR_RANGE_SYMBOL,
+	__EXPR_MAX
 };
+#define EXPR_MAX	(__EXPR_MAX - 1)
 
 enum ops {
 	OP_INVALID,
@@ -211,6 +217,7 @@ enum expr_flags {
 	EXPR_F_INTERVAL		= 0x20,
 	EXPR_F_KERNEL		= 0x40,
 	EXPR_F_REMOVE		= 0x80,
+	EXPR_F_INTERVAL_OPEN	= 0x100,
 };
 
 #include <payload.h>
@@ -251,13 +258,15 @@ struct expr {
 	enum expr_types		etype:8;
 	enum ops		op:8;
 	unsigned int		len;
-	struct cmd		*cmd;
 
 	union {
 		struct {
-			/* EXPR_SYMBOL */
+			/* EXPR_SYMBOL, EXPR_RANGE_SYMBOL */
 			const struct scope	*scope;
-			const char		*identifier;
+			union {
+				const char	*identifier;
+				const char	*identifier_range[2];
+			};
 			enum symbol_types	symtype;
 		};
 		struct {
@@ -274,6 +283,11 @@ struct expr {
 			/* EXPR_VALUE */
 			mpz_t			value;
 		};
+		struct {
+			/* EXPR_RANGE_VALUE */
+			mpz_t			low;
+			mpz_t			high;
+		} range;
 		struct {
 			/* EXPR_PREFIX */
 			struct expr		*prefix;
@@ -298,7 +312,6 @@ struct expr {
 			uint64_t		expiration;
 			const char		*comment;
 			struct list_head	stmt_list;
-			uint32_t		elem_flags;
 		};
 		struct {
 			/* EXPR_UNARY */
@@ -387,12 +400,6 @@ struct expr {
 			uint8_t			ttl;
 			uint32_t		flags;
 		} osf;
-		struct {
-			/* EXPR_FLAGCMP */
-			struct expr		*expr;
-			struct expr		*mask;
-			struct expr		*value;
-		} flagcmp;
 	};
 };
 
@@ -410,8 +417,6 @@ extern void expr_describe(const struct expr *expr, struct output_ctx *octx);
 extern const struct datatype *expr_basetype(const struct expr *expr);
 extern void expr_set_type(struct expr *expr, const struct datatype *dtype,
 			  enum byteorder byteorder);
-
-void expr_to_string(const struct expr *expr, char *string);
 
 struct eval_ctx;
 extern int expr_binary_error(struct list_head *msgs,
@@ -472,6 +477,16 @@ extern struct expr *constant_expr_join(const struct expr *e1,
 				       const struct expr *e2);
 extern struct expr *constant_expr_splice(struct expr *expr, unsigned int len);
 
+extern struct expr *constant_range_expr_alloc(const struct location *loc,
+					      const struct datatype *dtype,
+					      enum byteorder byteorder,
+					      unsigned int len,
+					      mpz_t low, mpz_t high);
+
+struct expr *symbol_range_expr_alloc(const struct location *loc,
+				     enum symbol_types type, const struct scope *scope,
+				     const char *identifier_low, const char *identifier_high);
+
 extern struct expr *flag_expr_alloc(const struct location *loc,
 				    const struct datatype *dtype,
 				    enum byteorder byteorder,
@@ -496,6 +511,7 @@ extern void list_splice_sorted(struct list_head *list, struct list_head *head);
 extern struct expr *concat_expr_alloc(const struct location *loc);
 
 extern struct expr *list_expr_alloc(const struct location *loc);
+struct expr *list_expr_to_binop(struct expr *expr);
 
 extern struct expr *set_expr_alloc(const struct location *loc,
 				   const struct set *set);
@@ -520,11 +536,8 @@ extern struct expr *set_elem_expr_alloc(const struct location *loc,
 
 struct expr *set_elem_catchall_expr_alloc(const struct location *loc);
 
-struct expr *flagcmp_expr_alloc(const struct location *loc, enum ops op,
-				struct expr *expr, struct expr *mask,
-				struct expr *value);
-
 extern void range_expr_value_low(mpz_t rop, const struct expr *expr);
 extern void range_expr_value_high(mpz_t rop, const struct expr *expr);
+void range_expr_swap_values(struct expr *range);
 
 #endif /* NFTABLES_EXPRESSION_H */

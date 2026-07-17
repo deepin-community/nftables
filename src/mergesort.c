@@ -38,6 +38,8 @@ static mpz_srcptr expr_msort_value(const struct expr *expr, mpz_t value)
 		return expr_msort_value(expr->left, value);
 	case EXPR_VALUE:
 		return expr->value;
+	case EXPR_RANGE_VALUE:
+		return expr->range.low;
 	case EXPR_CONCAT:
 		concat_expr_msort_value(expr, value);
 		break;
@@ -78,7 +80,7 @@ void list_splice_sorted(struct list_head *list, struct list_head *head)
 	while (l != list) {
 		if (h == head ||
 		    expr_msort_cmp(list_entry(l, typeof(struct expr), list),
-				   list_entry(h, typeof(struct expr), list)) < 0) {
+				   list_entry(h, typeof(struct expr), list)) <= 0) {
 			l = l->next;
 			list_add_tail(l->prev, h);
 			continue;

@@ -303,3 +303,40 @@
     }
 ]
 
+# add @map2 { ip saddr . ip daddr . th dport : 10.0.0.1 . 80 }
+[
+    {
+        "map": {
+            "data": {
+                "concat": [
+                    "10.0.0.1",
+                    80
+                ]
+            },
+            "elem": {
+                "concat": [
+                    {
+                        "payload": {
+                            "field": "saddr",
+                            "protocol": "ip"
+                        }
+                    },
+                    {
+                        "payload": {
+                            "field": "daddr",
+                            "protocol": "ip"
+                        }
+                    },
+                    {
+                        "payload": {
+                            "field": "dport",
+                            "protocol": "th"
+                        }
+                    }
+                ]
+            },
+            "map": "@map2",
+            "op": "add"
+        }
+    }
+]

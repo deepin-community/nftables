@@ -3,7 +3,7 @@
 # anon chains with c1 -> c2 recursive jump, expect failure
 $NFT -f - <<EOF
 table ip t {
- chain c2 { }
+ chain c2 { type filter hook input priority 0; }
  chain c1 { }
 }
 

@@ -168,7 +168,7 @@ inet
   [ exthdr load tcpopt 1b @ 30 + 0 present => reg 1 ]
   [ cmp eq reg 1 0x00000001 ]
 
-# tcp option mptcp subtype 0
+# tcp option mptcp subtype mp-capable
 inet
   [ exthdr load tcpopt 1b @ 30 + 2 => reg 1 ]
   [ bitwise reg 1 = ( reg 1 & 0x000000f0 ) ^ 0x00000000 ]
@@ -180,13 +180,26 @@ inet
   [ bitwise reg 1 = ( reg 1 & 0x000000f0 ) ^ 0x00000000 ]
   [ cmp eq reg 1 0x00000010 ]
 
-# tcp option mptcp subtype { 0, 2}
-__set%d test-inet 3 size 2
-__set%d test-inet 0
-	element 00000000  : 0 [end]	element 00000020  : 0 [end]
-inet
+# tcp option mptcp subtype { mp-capable, mp-join, remove-addr, mp-prio, mp-fail, mp-fastclose, mp-tcprst }
+__set%d test-ip4 3 size 7
+__set%d test-ip4 0
+	element 00000000  : 0 [end]	element 00000010  : 0 [end]	element 00000040  : 0 [end]	element 00000050  : 0 [end]	element 00000060  : 0 [end]	element 00000070  : 0 [end]	element 00000080  : 0 [end]
+ip test-ip4 input
   [ exthdr load tcpopt 1b @ 30 + 2 => reg 1 ]
   [ bitwise reg 1 = ( reg 1 & 0x000000f0 ) ^ 0x00000000 ]
+  [ lookup reg 1 set __set%d ]
+
+# tcp option mptcp subtype . tcp dport { mp-capable . 10, mp-join . 100, add-addr . 200, remove-addr . 300, mp-prio . 400, mp-fail . 500, mp-fastclose . 600, mp-tcprst . 700 }
+__set%d test-ip4 3
+__set%d test-ip4 0
+        element 00000000 00000a00  : 0 [end]    element 00000001 00006400  : 0 [end]    element 00000003 0000c800  : 0 [end]    element 00000004 00002c01  : 0 [end]    element 00000005 00009001  : 0 [end]    element 00000006 0000f401  : 0 [end]    element 00000007 00005802  : 0 [end]    element 00000008 0000bc02  : 0 [end]
+ip test-ip4 input
+  [ meta load l4proto => reg 1 ]
+  [ cmp eq reg 1 0x00000006 ]
+  [ exthdr load tcpopt 1b @ 30 + 2 => reg 1 ]
+  [ bitwise reg 1 = ( reg 1 & 0x000000f0 ) ^ 0x00000000 ]
+  [ bitwise reg 1 = ( reg 1 >> 0x00000004 ) ]
+  [ payload load 2b @ transport header + 2 => reg 9 ]
   [ lookup reg 1 set __set%d ]
 
 # reset tcp option mptcp

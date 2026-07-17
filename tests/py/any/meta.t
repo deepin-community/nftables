@@ -56,7 +56,7 @@ meta mark and 0x03 == 0x01;ok;meta mark & 0x00000003 == 0x00000001
 meta mark and 0x03 != 0x01;ok;meta mark & 0x00000003 != 0x00000001
 meta mark 0x10;ok;meta mark 0x00000010
 meta mark != 0x10;ok;meta mark != 0x00000010
-meta mark 0xffffff00/24;ok
+meta mark 0xffffff00/24;ok;meta mark & 0xffffff00 == 0xffffff00
 
 meta mark or 0x03 == 0x01;ok;meta mark | 0x00000003 == 0x00000001
 meta mark or 0x03 != 0x01;ok;meta mark | 0x00000003 != 0x00000001
@@ -224,3 +224,9 @@ time > "2022-07-01 11:00:00" accept;ok;meta time > "2022-07-01 11:00:00" accept
 meta time "meh";fail
 meta hour "24:00" drop;fail
 meta day 7 drop;fail
+
+meta mark set vlan id map { 1 : 0x00000001, 4095 : 0x00004095 };ok
+!map1 typeof vlan id : meta mark;ok
+meta mark set vlan id map @map1;ok
+
+meta mark set meta mark | iif | meta cpu;ok

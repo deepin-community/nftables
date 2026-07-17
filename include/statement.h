@@ -90,7 +90,7 @@ enum {
 };
 
 struct log_stmt {
-	struct expr		*prefix;
+	const char		*prefix;
 	unsigned int		snaplen;
 	uint16_t		group;
 	uint16_t		qthreshold;
@@ -372,16 +372,16 @@ enum stmt_flags {
  * struct stmt
  *
  * @list:	rule list node
- * @ops:	statement ops
  * @location:	location where the statement was defined
  * @flags:	statement flags
+ * @type:	statement type
  * @union:	type specific data
  */
 struct stmt {
 	struct list_head		list;
-	const struct stmt_ops		*ops;
 	struct location			location;
 	enum stmt_flags			flags;
+	enum stmt_types			type:8;
 
 	union {
 		struct expr		*expr;
@@ -416,9 +416,12 @@ struct stmt {
 extern struct stmt *stmt_alloc(const struct location *loc,
 			       const struct stmt_ops *ops);
 int stmt_evaluate(struct eval_ctx *ctx, struct stmt *stmt);
+int stmt_dependency_evaluate(struct eval_ctx *ctx, struct stmt *stmt);
 extern void stmt_free(struct stmt *stmt);
 extern void stmt_list_free(struct list_head *list);
 extern void stmt_print(const struct stmt *stmt, struct output_ctx *octx);
+const char *stmt_name(const struct stmt *stmt);
+const struct stmt_ops *stmt_ops(const struct stmt *stmt);
 
 const char *get_rate(uint64_t byte_rate, uint64_t *rate);
 const char *get_unit(uint64_t u);

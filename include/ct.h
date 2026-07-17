@@ -42,4 +42,8 @@ extern const struct datatype ct_status_type;
 extern const struct datatype ct_label_type;
 extern const struct datatype ct_event_type;
 
+extern const struct stmt_ops ct_stmt_ops;
+extern const struct stmt_ops notrack_stmt_ops;
+extern const struct stmt_ops flow_offload_stmt_ops;
+
 #endif /* NFTABLES_CT_H */

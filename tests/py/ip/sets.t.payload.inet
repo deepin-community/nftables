@@ -104,3 +104,14 @@ inet
   [ payload load 4b @ network header + 12 => reg 1 ]
   [ lookup reg 1 set __map%d dreg 1 ]
   [ meta set mark with reg 1 ]
+
+# add @map2 { ip saddr . ip daddr . th dport : 10.0.0.1 . 80 }
+inet test-inet input
+  [ meta load nfproto => reg 1 ]
+  [ cmp eq reg 1 0x00000002 ]
+  [ payload load 4b @ network header + 12 => reg 1 ]
+  [ payload load 4b @ network header + 16 => reg 9 ]
+  [ payload load 2b @ transport header + 2 => reg 10 ]
+  [ immediate reg 11 0x0100000a ]
+  [ immediate reg 2 0x00005000 ]
+  [ dynset add reg_key 1 set map2 sreg_data 11 ]

@@ -1,5 +1,5 @@
-AC_INIT([nftables], [1.0.9], [netfilter-devel@vger.kernel.org])
-AC_DEFINE([RELEASE_NAME], ["Old Doc Yak #3"], [Release name])
+AC_INIT([nftables], [1.1.3], [netfilter-devel@vger.kernel.org])
+AC_DEFINE([RELEASE_NAME], ["Commodore Bullmoose #4"], [Release name])
 
 AC_CONFIG_AUX_DIR([build-aux])
 AC_CONFIG_MACRO_DIR([m4])
@@ -53,11 +53,11 @@ CHECK_GCC_FVISIBILITY
 AS_IF([test "x$enable_man_doc" = "xyes"], [
        AC_CHECK_PROG(A2X, [a2x], [a2x], [no])
        AS_IF([test "$A2X" = "no" -a ! -f "${srcdir}/doc/nft.8"],
-	     [AC_MSG_ERROR([a2x not found, please install asciidoc])])
+	     [AC_MSG_ERROR([a2x not found, please install asciidoc, or pass --disable-man-doc])])
 ])
 
 PKG_CHECK_MODULES([LIBMNL], [libmnl >= 1.0.4])
-PKG_CHECK_MODULES([LIBNFTNL], [libnftnl >= 1.2.6])
+PKG_CHECK_MODULES([LIBNFTNL], [libnftnl >= 1.2.9])
 
 AC_ARG_WITH([mini-gmp], [AS_HELP_STRING([--with-mini-gmp],
             [Use builtin mini-gmp (for embedded builds)])],
@@ -117,22 +117,6 @@ AC_CHECK_DECLS([getprotobyname_r, getprotobynumber_r, getservbyport_r], [], [], 
 AC_CONFIG_FILES([					\
 		Makefile				\
 		libnftables.pc				\
-		src/Makefile				\
-		include/Makefile			\
-		include/nftables/Makefile		\
-		include/linux/Makefile			\
-		include/linux/netfilter/Makefile	\
-		include/linux/netfilter_arp/Makefile	\
-		include/linux/netfilter_bridge/Makefile	\
-		include/linux/netfilter_ipv4/Makefile	\
-		include/linux/netfilter_ipv6/Makefile	\
-		files/Makefile				\
-		files/examples/Makefile			\
-		files/nftables/Makefile			\
-		files/osf/Makefile			\
-		doc/Makefile				\
-		py/Makefile				\
-		examples/Makefile			\
 		])
 AC_OUTPUT
 

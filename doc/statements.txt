@@ -56,7 +56,7 @@ set ip DSCP (diffserv) header field or ipv6 flow labels.
 ---------------------------------------
 # redirect tcp:http from 192.160.0.0/16 to local machine for routing instead of bridging
 # assumes 00:11:22:33:44:55 is local MAC address.
-bridge input meta iif eth0 ip saddr 192.168.0.0/16 tcp dport 80 meta pkttype set unicast ether daddr set 00:11:22:33:44:55
+bridge input meta iif eth0 ip saddr 192.168.0.0/16 tcp dport 80 meta pkttype set host ether daddr set 00:11:22:33:44:55
 -------------------------------------------
 
 .Set IPv4 DSCP header field
@@ -171,37 +171,77 @@ REJECT STATEMENT
 ____
 *reject* [ *with* 'REJECT_WITH' ]
 
-'REJECT_WITH' := *icmp* 'icmp_code' |
-                 *icmpv6* 'icmpv6_code' |
-                 *icmpx* 'icmpx_code' |
+'REJECT_WITH' := *icmp* 'icmp_reject_code' |
+                 *icmpv6* 'icmpv6_reject_code' |
+                 *icmpx* 'icmpx_reject_code' |
                  *tcp reset*
 ____
 
 A reject statement is used to send back an error packet in response to the
 matched packet otherwise it is equivalent to drop so it is a terminating
 statement, ending rule traversal. This statement is only valid in base chains
-using the *input*,
+using the *prerouting*, *input*,
 *forward* or *output* hooks, and user-defined chains which are only called from
 those chains.
 
-.different ICMP reject variants are meant for use in different table families
+.Keywords may be used to reject when specifying the ICMP code
 [options="header"]
 |==================
-|Variant |Family | Type
-|icmp|
-ip|
-icmp_code
-|icmpv6|
-ip6|
-icmpv6_code
-|icmpx|
-inet|
-icmpx_code
+|Keyword | Value
+|net-unreachable |
+0
+|host-unreachable |
+1
+|prot-unreachable|
+2
+|port-unreachable|
+3
+|frag-needed|
+4
+|net-prohibited|
+9
+|host-prohibited|
+10
+|admin-prohibited|
+13
+|===================
+
+.keywords may be used to reject when specifying the ICMPv6 code
+[options="header"]
+|==================
+|Keyword |Value
+|no-route|
+0
+|admin-prohibited|
+1
+|addr-unreachable|
+3
+|port-unreachable|
+4
+|policy-fail|
+5
+|reject-route|
+6
 |==================
 
-For a description of the different types and a list of supported keywords refer
-to DATA TYPES section above. The common default reject value is
-*port-unreachable*. +
+The ICMPvX Code type abstraction is a set of values which overlap between ICMP
+and ICMPv6 Code types to be used from the inet family.
+
+.keywords may be used when specifying the ICMPvX code
+[options="header"]
+|==================
+|Keyword |Value
+|no-route|
+0
+|port-unreachable|
+1
+|host-unreachable|
+2
+|admin-prohibited|
+3
+|=================
+
+The common default ICMP code to reject is *port-unreachable*.
 
 Note that in bridge family, reject statement is only allowed in base chains
 which hook into input or prerouting.
@@ -543,26 +583,57 @@ this case the rule will match for both families.
 table ip x {
     chain y {
         type filter hook prerouting priority mangle; policy accept;
-        tcp dport ntp tproxy to 1.1.1.1
-        udp dport ssh tproxy to :2222
+        tcp dport ntp tproxy to 1.1.1.1 accept
+        udp dport ssh tproxy to :2222 accept
     }
 }
 table ip6 x {
     chain y {
        type filter hook prerouting priority mangle; policy accept;
-       tcp dport ntp tproxy to [dead::beef]
-       udp dport ssh tproxy to :2222
+       tcp dport ntp tproxy to [dead::beef] accept
+       udp dport ssh tproxy to :2222 accept
     }
 }
 table inet x {
     chain y {
         type filter hook prerouting priority mangle; policy accept;
-        tcp dport 321 tproxy to :ssh
-        tcp dport 99 tproxy ip to 1.1.1.1:999
-        udp dport 155 tproxy ip6 to [dead::beef]:smux
+        tcp dport 321 tproxy to :22 accept
+        tcp dport 99 tproxy ip to 1.1.1.1:999 accept
+        udp dport 155 tproxy ip6 to [dead::beef]:smux accept
     }
 }
 -------------------------------------
+
+Note that the tproxy statement is non-terminal to allow post-processing of
+packets. This allows packets to be logged for debugging as well as updating the
+mark to ensure that packets are delivered locally through policy routing rules.
+
+.Example ruleset for tproxy statement with logging and meta mark
+-------------------------------------
+table inet x {
+    chain y {
+        type filter hook prerouting priority mangle; policy accept;
+        udp dport 9999 goto {
+            tproxy to :1234 log prefix "packet tproxied: " meta mark set 1 accept
+            log prefix "no socket on port 1234 or not transparent?: " drop
+        }
+    }
+}
+-------------------------------------
+
+As packet headers are unchanged, packets might be forwarded instead of delivered
+locally. As mentioned above, this can be avoided by adding policy routing rules
+and the packet mark.
+
+.Example policy routing rules for local redirection
+----------------------------------------------------
+ip rule add fwmark 1 lookup 100
+ip route add local 0.0.0.0/0 dev lo table 100
+----------------------------------------------------
+
+This is a change in behavior compared to the legacy iptables TPROXY target
+which is terminal. To terminate the packet processing after the tproxy
+statement, remember to issue a verdict as in the example above.
 
 SYNPROXY STATEMENT
 ~~~~~~~~~~~~~~~~~~

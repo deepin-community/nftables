@@ -112,4 +112,8 @@ extern void scanner_push_buffer(void *scanner,
 
 extern void scanner_pop_start_cond(void *scanner, enum startcond_type sc);
 
+const char *str_preprocess(struct parser_state *state, struct location *loc,
+			   struct scope *scope, const char *x,
+			   struct error_record **rec);
+
 #endif /* NFTABLES_PARSER_H */

@@ -15,6 +15,20 @@ array_contains() {
 	return 1
 }
 
+show_file() {
+	local filename="$1"
+	shift
+	local msg="$*"
+
+	printf '%s\n>>>>\n' "$msg"
+	cat "$filename"
+	printf "<<<<\n"
+}
+
+json_pretty() {
+	"$NFT_TEST_BASEDIR/helpers/json-pretty.sh" "$@" 2>&1 || :
+}
+
 TEST="$1"
 TESTBASE="$(basename "$TEST")"
 TESTDIR="$(dirname "$TEST")"
@@ -48,7 +62,7 @@ if [ "$NFT_TEST_HAS_UNSHARED_MOUNT" = y ] ; then
 	# Note that this also hides everything that might reside in /var/run.
 	# That is desirable, as tests should not depend on content there (or if
 	# they do, we need to explicitly handle it as appropriate).
-	if mount -t tmpfs --make-private "/var/run" ; then
+	if mount -t tmpfs --make-private tmpfs "/var/run" ; then
 		CLEANUP_UMOUNT_VAR_RUN=y
 	fi
 	mkdir -p /var/run/netns
@@ -93,79 +107,170 @@ if [ "$rc_test" -eq 0 ] ; then
 fi
 
 if [ "$rc_test" -eq 0 ] ; then
-	"$TEST" &>> "$NFT_TEST_TESTTMPDIR/testout.log" || rc_test=$?
+	CMD=( "$TEST" )
+	if [ "$NFT_TEST_VERBOSE_TEST" = y ] ; then
+		X="$(sed -n '1 s/^#!\(\/bin\/bash\>.*$\)/\1/p' "$TEST" 2>/dev/null)"
+		if [ -n "$X" ] ; then
+			# Note that kernel parses the shebang differently and does not
+			# word splitting for the arguments. We do split the arguments here
+			# which would matter if there are spaces. For our tests, there
+			# are either no arguments or only one argument without space. So
+			# this is good enough.
+			CMD=( $X -x "$TEST" )
+		fi
+	fi
+	printf "Command: $(printf '%q ' "${CMD[@]}")\n" &>> "$NFT_TEST_TESTTMPDIR/testout.log"
+	"${CMD[@]}" &>> "$NFT_TEST_TESTTMPDIR/testout.log" || rc_test=$?
 fi
 
-$NFT list ruleset > "$NFT_TEST_TESTTMPDIR/ruleset-after"
+rc_chkdump=0
+rc=0
+$NFT list ruleset > "$NFT_TEST_TESTTMPDIR/ruleset-after" 2> "$NFT_TEST_TESTTMPDIR/chkdump" || rc=$?
+if [ "$rc" -ne 0 -o -s "$NFT_TEST_TESTTMPDIR/chkdump" ] ; then
+	show_file "$NFT_TEST_TESTTMPDIR/chkdump" "Command \`$NFT list ruleset\` failed" >> "$NFT_TEST_TESTTMPDIR/rc-failed-chkdump"
+	rc_chkdump=1
+fi
+if [ "$NFT_TEST_HAVE_json" != n ] ; then
+	rc=0
+	$NFT -j list ruleset > "$NFT_TEST_TESTTMPDIR/ruleset-after.json" 2> "$NFT_TEST_TESTTMPDIR/chkdump" || rc=$?
+
+	# Workaround known bug in stmt_print_json(), due to
+	# "chain_stmt_ops.json" being NULL. This spams stderr.
+	sed -i '/^warning: stmt ops chain have no json callback$/d' "$NFT_TEST_TESTTMPDIR/chkdump"
+
+	if [ "$rc" -ne 0 -o -s "$NFT_TEST_TESTTMPDIR/chkdump" ] ; then
+		show_file "$NFT_TEST_TESTTMPDIR/chkdump" "Command \`$NFT -j list ruleset\` failed" >> "$NFT_TEST_TESTTMPDIR/rc-failed-chkdump"
+		rc_chkdump=1
+	fi
+	# JSON output needs normalization/sanitization, otherwise it's not stable.
+	"$NFT_TEST_BASEDIR/helpers/json-sanitize-ruleset.sh" "$NFT_TEST_TESTTMPDIR/ruleset-after.json"
+	json_pretty "$NFT_TEST_TESTTMPDIR/ruleset-after.json" > "$NFT_TEST_TESTTMPDIR/ruleset-after.json-pretty"
+fi
 
 read tainted_after < /proc/sys/kernel/tainted
 
 DUMPPATH="$TESTDIR/dumps"
 DUMPFILE="$DUMPPATH/$TESTBASE.nft"
+JDUMPFILE="$DUMPPATH/$TESTBASE.json-nft"
 NODUMPFILE="$DUMPPATH/$TESTBASE.nodump"
 
-dump_written=
-
-# The caller can request a re-geneating of the dumps, by setting
-# DUMPGEN=y.
+# The caller can request a re-geneating of the .nft, .nodump, .json-nft dump files
+# by setting DUMPGEN=y. In that case, only the existing files will be regenerated
+# (unless all three files are missing, in which case all of them are generated).
 #
-# This only will happen if the command completed with success.
-#
-# It also will only happen for tests, that have a "$DUMPPATH" directory. There
-# might be tests, that don't want to have dumps created. The existence of the
-# directory controls that. Tests that have a "$NODUMPFILE" file, don't get a dump generated.
-if [ "$rc_test" -eq 0 -a "$DUMPGEN" = y -a -d "$DUMPPATH" -a ! -f "$NODUMPFILE" ] ; then
+# By setting DUMPGEN=all, all 3 files are always regenerated.
+dump_written=n
+if [ "$rc_test" -eq 0 -a '(' "$DUMPGEN" = all -o "$DUMPGEN" = y ')' ] ; then
 	dump_written=y
-	if [ ! -f "$DUMPFILE" ] ; then
-		# No dumpfile exists yet. We generate both a .nft and a .nodump
-		# file. The user can pick which one to commit to git.
+	if [ ! -d "$DUMPPATH" ] ; then
+		mkdir "$DUMPPATH"
+	fi
+	if [ "$DUMPGEN" = all ] ; then
+		gen_nodumpfile=y
+		gen_dumpfile=y
+		gen_jdumpfile=y
+	else
+		# by default, only regenerate the files that we already have on disk.
+		gen_nodumpfile=n
+		gen_dumpfile=n
+		gen_jdumpfile=n
+		test -f "$DUMPFILE"  && gen_dumpfile=y
+		test -f "$JDUMPFILE" && gen_jdumpfile=y
+		test -f "$NODUMPFILE" && gen_nodumpfile=y
+		if [ "$gen_dumpfile" != y -a "$gen_jdumpfile" != y -a "$gen_nodumpfile" != y ] ; then
+			# Except, if no files exist. Them generate all files.
+			gen_dumpfile=y
+			gen_jdumpfile=y
+			gen_nodumpfile=y
+		fi
+	fi
+	if [ "$gen_nodumpfile" = y ] ; then
 		: > "$NODUMPFILE"
 	fi
-	cat "$NFT_TEST_TESTTMPDIR/ruleset-after" > "$DUMPFILE"
+	if [ "$gen_dumpfile" = y ] ; then
+		cat "$NFT_TEST_TESTTMPDIR/ruleset-after" > "$DUMPFILE"
+	fi
+	if [ "$NFT_TEST_HAVE_json" != n -a "$gen_jdumpfile" = y ] ; then
+		cat "$NFT_TEST_TESTTMPDIR/ruleset-after.json-pretty" > "$JDUMPFILE"
+	fi
 fi
 
 rc_dump=0
-if [ "$rc_test" -ne 77 -a -f "$DUMPFILE" ] ; then
-	if [ "$dump_written" != y ] ; then
+if [ "$rc_test" -ne 77 -a "$dump_written" != y ] ; then
+	if [ -f "$DUMPFILE" ] ; then
 		if ! $DIFF -u "$DUMPFILE" "$NFT_TEST_TESTTMPDIR/ruleset-after" &> "$NFT_TEST_TESTTMPDIR/ruleset-diff" ; then
+			show_file "$NFT_TEST_TESTTMPDIR/ruleset-diff" "Failed \`$DIFF -u \"$DUMPFILE\" \"$NFT_TEST_TESTTMPDIR/ruleset-after\"\`" >> "$NFT_TEST_TESTTMPDIR/rc-failed-dump"
 			rc_dump=1
 		else
 			rm -f "$NFT_TEST_TESTTMPDIR/ruleset-diff"
 		fi
 	fi
-fi
-if [ "$rc_dump" -ne 0 ] ; then
-	echo "$DUMPFILE" > "$NFT_TEST_TESTTMPDIR/rc-failed-dump"
-fi
-
-rc_chkdump=0
-# check that a flush after the test succeeds. We anyway need a clean ruleset
-# for the `nft --check` next.
-$NFT flush ruleset &> "$NFT_TEST_TESTTMPDIR/rc-failed-chkdump" || rc_chkdump=1
-if [ -f "$DUMPFILE" ] ; then
-	# We have a dumpfile. Call `nft --check` to possibly cover new code
-	# paths.
-	if [ "$rc_test" -eq 77 ] ; then
-		# The test was skipped. Possibly we don't have the required
-		# features to process this file. Ignore any output and exit
-		# code, but still call the program (for valgrind or sanitizer
-		# issue we hope to find).
-		$NFT --check -f "$DUMPFILE" &>/dev/null || :
-	else
-		$NFT --check -f "$DUMPFILE" &>> "$NFT_TEST_TESTTMPDIR/rc-failed-chkdump" || rc_chkdump=1
+	if [ "$NFT_TEST_HAVE_json" != n -a -f "$JDUMPFILE" ] ; then
+		if ! $DIFF -u "$JDUMPFILE" "$NFT_TEST_TESTTMPDIR/ruleset-after.json-pretty" &> "$NFT_TEST_TESTTMPDIR/ruleset-diff.json" ; then
+			show_file "$NFT_TEST_TESTTMPDIR/ruleset-diff.json" "Failed \`$DIFF -u \"$JDUMPFILE\" \"$NFT_TEST_TESTTMPDIR/ruleset-after.json-pretty\"\`" >> "$NFT_TEST_TESTTMPDIR/rc-failed-dump"
+			rc_dump=1
+		else
+			rm -f "$NFT_TEST_TESTTMPDIR/ruleset-diff.json"
+		fi
 	fi
 fi
-if [ -s "$NFT_TEST_TESTTMPDIR/rc-failed-chkdump" ] ; then
-	# Non-empty output? That is wrong.
+
+# check that a flush after the test succeeds. We anyway need a clean ruleset
+# for the `nft --check` next.
+rc=0
+$NFT flush ruleset &> "$NFT_TEST_TESTTMPDIR/chkdump" || rc=1
+if [ "$rc" = 1 -o -s "$NFT_TEST_TESTTMPDIR/chkdump" ] ; then
+	show_file "$NFT_TEST_TESTTMPDIR/chkdump" "Command \`$NFT flush ruleset\` failed" >> "$NFT_TEST_TESTTMPDIR/rc-failed-chkdump"
 	rc_chkdump=1
-elif [ "$rc_chkdump" -eq 0 ] ; then
-	rm -rf "$NFT_TEST_TESTTMPDIR/rc-failed-chkdump"
 fi
-if [ "$rc_chkdump" -ne 0 ] ; then
-	# Ensure we don't have empty output files. Always write something, so
-	# that `grep ^ -R` lists the file.
-	echo -e "<<<<<\n\nCalling \`nft --check\` (or \`nft flush ruleset\`) failed for \"$DUMPFILE\"" >> "$NFT_TEST_TESTTMPDIR/rc-failed-chkdump"
+# Check that `nft [-j] list ruleset | nft [-j] --check -f -` works.
+fail=n
+$NFT --check -f "$NFT_TEST_TESTTMPDIR/ruleset-after" &> "$NFT_TEST_TESTTMPDIR/chkdump" || fail=y
+test -s "$NFT_TEST_TESTTMPDIR/chkdump" && fail=y
+if [ "$fail" = y ] ; then
+	show_file "$NFT_TEST_TESTTMPDIR/chkdump" "Command \`$NFT --check -f \"$NFT_TEST_TESTTMPDIR/ruleset-after\"\` failed" >> "$NFT_TEST_TESTTMPDIR/rc-failed-chkdump"
+	rc_chkdump=1
 fi
+if [ -f "$DUMPFILE" ] && ! cmp "$DUMPFILE" "$NFT_TEST_TESTTMPDIR/ruleset-after" &>/dev/null ; then
+	# Also check the $DUMPFILE to hit possibly new code paths. This
+	# is useful to see crashes and with ASAN/valgrind.
+	$NFT --check -f "$DUMPFILE" &>/dev/null || :
+fi
+if [ "$NFT_TEST_HAVE_json" != n ] ; then
+	if [ ! -f "$JDUMPFILE" ] ; then
+		# Optimally, `nft -j list ruleset | nft -j --check -f -` never
+		# fails.  However, there are known issues where this doesn't
+		# work, and we cannot assert hard against that. It's those
+		# tests that don't have a .json-nft file.
+		#
+		# This should be fixed, every test should have a .json-nft
+		# file, and this workaround removed.
+		$NFT -j --check -f "$NFT_TEST_TESTTMPDIR/ruleset-after.json" &>/dev/null || :
+		$NFT -j --check -f "$NFT_TEST_TESTTMPDIR/ruleset-after.json-pretty" &>/dev/null || :
+	else
+		fail=n
+		$NFT -j --check -f "$NFT_TEST_TESTTMPDIR/ruleset-after.json" &> "$NFT_TEST_TESTTMPDIR/chkdump" || fail=y
+		test -s "$NFT_TEST_TESTTMPDIR/chkdump" && fail=y
+		if [ "$fail" = y ] ; then
+			show_file "$NFT_TEST_TESTTMPDIR/chkdump" "Command \`$NFT -j --check -f \"$NFT_TEST_TESTTMPDIR/ruleset-after.json\"\` failed" >> "$NFT_TEST_TESTTMPDIR/rc-failed-chkdump"
+			rc_chkdump=1
+		fi
+		fail=n
+		$NFT -j --check -f "$NFT_TEST_TESTTMPDIR/ruleset-after.json-pretty" &> "$NFT_TEST_TESTTMPDIR/chkdump" || fail=y
+		test -s "$NFT_TEST_TESTTMPDIR/chkdump" && fail=y
+		if [ "$fail" = y ] ; then
+			show_file "$NFT_TEST_TESTTMPDIR/chkdump" "Command \`$NFT -j --check -f \"$NFT_TEST_TESTTMPDIR/ruleset-after.json-pretty\"\` failed" >> "$NFT_TEST_TESTTMPDIR/rc-failed-chkdump"
+			rc_chkdump=1
+		fi
+	fi
+	if [ -f "$JDUMPFILE" ] \
+	     && ! cmp "$JDUMPFILE" "$NFT_TEST_TESTTMPDIR/ruleset-after.json" &>/dev/null \
+	     && ! cmp "$JDUMPFILE" "$NFT_TEST_TESTTMPDIR/ruleset-after.json-pretty" &>/dev/null ; \
+	then
+		$NFT -j --check -f "$JDUMPFILE" &>/dev/null || :
+	fi
+fi
+rm -f "$NFT_TEST_TESTTMPDIR/chkdump"
 
 rc_valgrind=0
 [ -f "$NFT_TEST_TESTTMPDIR/rc-failed-valgrind" ] && rc_valgrind=1

@@ -27,3 +27,4 @@ $NFT -f - <<< "$RULESET"
 $NFT add chain netdev x y '{ devices = { d0 }; }'
 $NFT add chain netdev x y '{ devices = { d1, d2, lo }; }'
 $NFT delete chain netdev x y '{ devices = { lo }; }'
+$NFT delete chain netdev x y

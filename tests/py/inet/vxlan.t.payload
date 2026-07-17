@@ -4,7 +4,7 @@ netdev test-netdev ingress
   [ cmp eq reg 1 0x00000011 ]
   [ payload load 2b @ transport header + 2 => reg 1 ]
   [ cmp eq reg 1 0x0000b512 ]
-  [ inner type 1 hdrsize 8 flags f [ payload load 3b @ unknown header + 4 => reg 1 ] ]
+  [ inner type 1 hdrsize 8 flags f [ payload load 3b @ tunnel header + 4 => reg 1 ] ]
   [ cmp eq reg 1 0x000a0000 ]
 
 # udp dport 4789 vxlan ip saddr 10.141.11.2

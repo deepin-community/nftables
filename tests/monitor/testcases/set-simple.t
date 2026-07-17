@@ -37,9 +37,10 @@ J {"add": {"element": {"family": "ip", "table": "t", "name": "portrange", "elem"
 # make sure half open before other element works
 I add element ip t portrange { 1024-65535 }
 I add element ip t portrange { 100-200 }
-O -
-J {"add": {"element": {"family": "ip", "table": "t", "name": "portrange", "elem": {"set": [{"range": [1024, 65535]}]}}}}
+O add element ip t portrange { 100-200 }
+O add element ip t portrange { 1024-65535 }
 J {"add": {"element": {"family": "ip", "table": "t", "name": "portrange", "elem": {"set": [{"range": [100, 200]}]}}}}
+J {"add": {"element": {"family": "ip", "table": "t", "name": "portrange", "elem": {"set": [{"range": [1024, 65535]}]}}}}
 
 # make sure deletion of elements works
 I delete element ip t portrange { 0-10 }

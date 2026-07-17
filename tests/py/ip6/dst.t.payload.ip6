@@ -11,8 +11,7 @@ ip6 test-ip6 input
 # dst nexthdr 33-45
 ip6 test-ip6 input
   [ exthdr load ipv6 1b @ 60 + 0 => reg 1 ]
-  [ cmp gte reg 1 0x00000021 ]
-  [ cmp lte reg 1 0x0000002d ]
+  [ range eq reg 1 0x00000021 0x0000002d ]
 
 # dst nexthdr != 33-45
 ip6 test-ip6 input
@@ -74,8 +73,7 @@ ip6 test-ip6 input
 # dst hdrlength 33-45
 ip6 test-ip6 input
   [ exthdr load ipv6 1b @ 60 + 1 => reg 1 ]
-  [ cmp gte reg 1 0x00000021 ]
-  [ cmp lte reg 1 0x0000002d ]
+  [ range eq reg 1 0x00000021 0x0000002d ]
 
 # dst hdrlength != 33-45
 ip6 test-ip6 input
