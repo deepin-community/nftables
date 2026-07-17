@@ -172,8 +172,7 @@ ip test-ip4 output
 ip test-ip4 output
   [ ct load mark => reg 1 ]
   [ byteorder reg 1 = hton(reg 1, 4, 4) ]
-  [ cmp gte reg 1 0x32000000 ]
-  [ cmp lte reg 1 0x45000000 ]
+  [ range eq reg 1 0x32000000 0x45000000 ]
 
 # ct mark != 0x00000032-0x00000045
 ip test-ip4 output
@@ -240,8 +239,7 @@ ip test-ip4 output
 ip test-ip4 output
   [ ct load expiration => reg 1 ]
   [ byteorder reg 1 = hton(reg 1, 4, 4) ]
-  [ cmp gte reg 1 0x60ea0000 ]
-  [ cmp lte reg 1 0x80ee3600 ]
+  [ range eq reg 1 0x60ea0000 0x80ee3600 ]
 
 # ct expiration > 4d23h59m59s
 ip test-ip4 output
@@ -258,8 +256,7 @@ ip test-ip4 output
 ip test-ip4 output
   [ ct load expiration => reg 1 ]
   [ byteorder reg 1 = hton(reg 1, 4, 4) ]
-  [ cmp gte reg 1 0xe8800000 ]
-  [ cmp lte reg 1 0xc8af0000 ]
+  [ range eq reg 1 0xe8800000 0xc8af0000 ]
 
 # ct expiration != 33-45
 ip test-ip4 output
@@ -334,6 +331,15 @@ __map%d test-ip4 0
 ip test-ip4 output
   [ meta load mark => reg 1 ]
   [ lookup reg 1 set __map%d dreg 1 ]
+  [ ct set mark with reg 1 ]
+
+# ct mark set ct mark and 0xffff0000 or meta mark and 0xffff
+ip
+  [ ct load mark => reg 1 ]
+  [ bitwise reg 1 = ( reg 1 & 0xffff0000 ) ^ 0x00000000 ]
+  [ meta load mark => reg 2 ]
+  [ bitwise reg 2 = ( reg 2 & 0x0000ffff ) ^ 0x00000000 ]
+  [ bitwise reg 1 = ( reg 1 | reg 2 ) ]
   [ ct set mark with reg 1 ]
 
 # ct original bytes > 100000
@@ -497,9 +503,15 @@ ip test-ip4 output
   [ bitwise reg 1 = ( reg 1 & 0xfffffffe ) ^ 0x00000001 ]
   [ ct set mark with reg 1 ]
 
+# ct mark set 0x00000001 or ct mark
+ip test-ip4 output
+  [ ct load mark => reg 1 ]
+  [ bitwise reg 1 = ( reg 1 & 0xfffffffe ) ^ 0x00000001 ]
+  [ ct set mark with reg 1 ]
+
 # ct id 12345
 ip test-ip4 output
-  [ ct load unknown => reg 1 ]
+  [ ct load id => reg 1 ]
   [ cmp eq reg 1 0x39300000 ]
 
 # ct status ! dnat

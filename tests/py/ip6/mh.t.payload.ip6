@@ -47,8 +47,7 @@ ip6 test-ip6 input
 # mh nexthdr 33-45
 ip6 test-ip6 input
   [ exthdr load ipv6 1b @ 135 + 0 => reg 1 ]
-  [ cmp gte reg 1 0x00000021 ]
-  [ cmp lte reg 1 0x0000002d ]
+  [ range eq reg 1 0x00000021 0x0000002d ]
 
 # mh nexthdr != 33-45
 ip6 test-ip6 input
@@ -84,8 +83,7 @@ ip6 test-ip6 input
 # mh hdrlength 33-45
 ip6 test-ip6 input
   [ exthdr load ipv6 1b @ 135 + 1 => reg 1 ]
-  [ cmp gte reg 1 0x00000021 ]
-  [ cmp lte reg 1 0x0000002d ]
+  [ range eq reg 1 0x00000021 0x0000002d ]
 
 # mh hdrlength != 33-45
 ip6 test-ip6 input
@@ -139,8 +137,7 @@ ip6 test-ip6 input
 # mh reserved 33-45
 ip6 test-ip6 input
   [ exthdr load ipv6 1b @ 135 + 3 => reg 1 ]
-  [ cmp gte reg 1 0x00000021 ]
-  [ cmp lte reg 1 0x0000002d ]
+  [ range eq reg 1 0x00000021 0x0000002d ]
 
 # mh reserved != 33-45
 ip6 test-ip6 input
@@ -176,8 +173,7 @@ ip6 test-ip6 input
 # mh checksum 33-45
 ip6 test-ip6 input
   [ exthdr load ipv6 2b @ 135 + 4 => reg 1 ]
-  [ cmp gte reg 1 0x00002100 ]
-  [ cmp lte reg 1 0x00002d00 ]
+  [ range eq reg 1 0x00002100 0x00002d00 ]
 
 # mh checksum != 33-45
 ip6 test-ip6 input

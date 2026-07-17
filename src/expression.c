@@ -94,7 +94,7 @@ void expr_free(struct expr *expr)
 	 */
 	if (expr->etype != EXPR_INVALID)
 		expr_destroy(expr);
-	xfree(expr);
+	free(expr);
 }
 
 void expr_print(const struct expr *expr, struct output_ctx *octx)
@@ -140,8 +140,10 @@ void expr_describe(const struct expr *expr, struct output_ctx *octx)
 		nft_print(octx, "%s expression, datatype %s (%s)",
 			  expr_name(expr), dtype->name, dtype->desc);
 
-		if (dtype == &invalid_type)
+		if (dtype == &invalid_type) {
+			nft_print(octx, "\n");
 			return;
+		}
 	}
 
 	if (dtype->basetype != NULL) {
@@ -179,15 +181,6 @@ void expr_describe(const struct expr *expr, struct output_ctx *octx)
 	} else if (edtype->describe) {
 		edtype->describe(octx);
 	}
-}
-
-void expr_to_string(const struct expr *expr, char *string)
-{
-	int len = expr->len / BITS_PER_BYTE;
-
-	assert(expr->dtype == &string_type);
-
-	mpz_export_data(string, expr->value, BYTEORDER_HOST_ENDIAN, len);
 }
 
 void expr_set_type(struct expr *expr, const struct datatype *dtype,
@@ -314,7 +307,7 @@ static void symbol_expr_clone(struct expr *new, const struct expr *expr)
 
 static void symbol_expr_destroy(struct expr *expr)
 {
-	xfree(expr->identifier);
+	free_const(expr->identifier);
 }
 
 static const struct expr_ops symbol_expr_ops = {
@@ -378,6 +371,84 @@ struct expr *variable_expr_alloc(const struct location *loc,
 	return expr;
 }
 
+#define NFTNL_UDATA_CONSTANT_TYPE 0
+#define NFTNL_UDATA_CONSTANT_MAX NFTNL_UDATA_CONSTANT_TYPE
+
+#define CONSTANT_EXPR_NFQUEUE_ID 0
+
+static int constant_expr_build_udata(struct nftnl_udata_buf *udbuf,
+				     const struct expr *expr)
+{
+	uint32_t type;
+
+	if (expr->dtype == &queue_type)
+		type = CONSTANT_EXPR_NFQUEUE_ID;
+	else
+		return -1;
+
+	if (!nftnl_udata_put_u32(udbuf, NFTNL_UDATA_CONSTANT_TYPE, type))
+		return -1;
+
+	return 0;
+}
+
+static int constant_parse_udata(const struct nftnl_udata *attr, void *data)
+{
+	const struct nftnl_udata **ud = data;
+	uint8_t type = nftnl_udata_type(attr);
+	uint8_t len = nftnl_udata_len(attr);
+	uint32_t value;
+
+	switch (type) {
+	case NFTNL_UDATA_CONSTANT_TYPE:
+		if (len != sizeof(uint32_t))
+			return -1;
+
+		value = nftnl_udata_get_u32(attr);
+		switch (value) {
+		case CONSTANT_EXPR_NFQUEUE_ID:
+			break;
+		default:
+			return -1;
+		}
+		break;
+	default:
+		return 0;
+	}
+
+	ud[type] = attr;
+
+	return 0;
+}
+
+static struct expr *constant_expr_parse_udata(const struct nftnl_udata *attr)
+{
+	const struct nftnl_udata *ud[NFTNL_UDATA_CONSTANT_MAX + 1] = {};
+	const struct datatype *dtype = NULL;
+	uint32_t type;
+	int err;
+
+	err = nftnl_udata_parse(nftnl_udata_get(attr), nftnl_udata_len(attr),
+				constant_parse_udata, ud);
+	if (err < 0)
+		return NULL;
+
+	if (!ud[NFTNL_UDATA_CONSTANT_TYPE])
+		return NULL;
+
+	type = nftnl_udata_get_u32(ud[NFTNL_UDATA_CONSTANT_TYPE]);
+	switch (type) {
+	case CONSTANT_EXPR_NFQUEUE_ID:
+		dtype = &queue_type;
+		break;
+	default:
+		break;
+	}
+
+	return constant_expr_alloc(&internal_location, dtype, BYTEORDER_HOST_ENDIAN,
+				   16, NULL);
+}
+
 static void constant_expr_print(const struct expr *expr,
 				 struct output_ctx *octx)
 {
@@ -408,6 +479,8 @@ static const struct expr_ops constant_expr_ops = {
 	.cmp		= constant_expr_cmp,
 	.clone		= constant_expr_clone,
 	.destroy	= constant_expr_destroy,
+	.build_udata	= constant_expr_build_udata,
+	.parse_udata	= constant_expr_parse_udata,
 };
 
 struct expr *constant_expr_alloc(const struct location *loc,
@@ -421,7 +494,7 @@ struct expr *constant_expr_alloc(const struct location *loc,
 	expr->flags = EXPR_F_CONSTANT | EXPR_F_SINGLETON;
 
 	mpz_init2(expr->value, len);
-	if (data != NULL)
+	if (data != NULL && len)
 		mpz_import_data(expr->value, data, byteorder,
 				div_round_up(len, BITS_PER_BYTE));
 
@@ -467,6 +540,128 @@ struct expr *constant_expr_splice(struct expr *expr, unsigned int len)
 
 	expr->len -= len;
 	return slice;
+}
+
+static void constant_range_expr_print_one(const struct expr *expr,
+					  const mpz_t value,
+					  struct output_ctx *octx)
+{
+	unsigned int len = div_round_up(expr->len, BITS_PER_BYTE);
+	unsigned char data[len];
+	struct expr *dummy;
+
+	/* create dummy temporary constant expression to print range. */
+	mpz_export_data(data, value, expr->byteorder, len);
+	dummy = constant_expr_alloc(&expr->location, expr->dtype,
+				    expr->byteorder, expr->len, data);
+	expr_print(dummy, octx);
+	expr_free(dummy);
+}
+
+static void constant_range_expr_print(const struct expr *expr,
+				      struct output_ctx *octx)
+{
+	unsigned int flags = octx->flags;
+
+	/* similar to range_expr_print(). */
+	octx->flags &= ~(NFT_CTX_OUTPUT_SERVICE |
+			 NFT_CTX_OUTPUT_REVERSEDNS |
+			 NFT_CTX_OUTPUT_GUID);
+	octx->flags |= NFT_CTX_OUTPUT_NUMERIC_ALL;
+
+	constant_range_expr_print_one(expr, expr->range.low, octx);
+	nft_print(octx, "-");
+	constant_range_expr_print_one(expr, expr->range.high, octx);
+
+	octx->flags = flags;
+}
+
+static bool constant_range_expr_cmp(const struct expr *e1, const struct expr *e2)
+{
+	return expr_basetype(e1) == expr_basetype(e2) &&
+	       !mpz_cmp(e1->range.low, e2->range.low) &&
+	       !mpz_cmp(e1->range.high, e2->range.high);
+}
+
+static void constant_range_expr_clone(struct expr *new, const struct expr *expr)
+{
+	mpz_init_set(new->range.low, expr->range.low);
+	mpz_init_set(new->range.high, expr->range.high);
+}
+
+static void constant_range_expr_destroy(struct expr *expr)
+{
+	mpz_clear(expr->range.low);
+	mpz_clear(expr->range.high);
+}
+
+static const struct expr_ops constant_range_expr_ops = {
+	.type		= EXPR_RANGE_VALUE,
+	.name		= "range_value",
+	.print		= constant_range_expr_print,
+	.cmp		= constant_range_expr_cmp,
+	.clone		= constant_range_expr_clone,
+	.destroy	= constant_range_expr_destroy,
+};
+
+struct expr *constant_range_expr_alloc(const struct location *loc,
+				       const struct datatype *dtype,
+				       enum byteorder byteorder,
+				       unsigned int len, mpz_t low, mpz_t high)
+{
+	struct expr *expr;
+
+	expr = expr_alloc(loc, EXPR_RANGE_VALUE, dtype, byteorder, len);
+	expr->flags = EXPR_F_CONSTANT | EXPR_F_SINGLETON;
+
+	mpz_init_set(expr->range.low, low);
+	mpz_init_set(expr->range.high, high);
+
+	return expr;
+}
+
+static void symbol_range_expr_print(const struct expr *expr, struct output_ctx *octx)
+{
+	nft_print(octx, "%s", expr->identifier_range[0]);
+	nft_print(octx, "-");
+	nft_print(octx, "%s", expr->identifier_range[1]);
+}
+
+static void symbol_range_expr_clone(struct expr *new, const struct expr *expr)
+{
+	new->symtype	= expr->symtype;
+	new->scope      = expr->scope;
+	new->identifier_range[0] = xstrdup(expr->identifier_range[0]);
+	new->identifier_range[1] = xstrdup(expr->identifier_range[1]);
+}
+
+static void symbol_range_expr_destroy(struct expr *expr)
+{
+	free_const(expr->identifier_range[0]);
+	free_const(expr->identifier_range[1]);
+}
+
+static const struct expr_ops symbol_range_expr_ops = {
+	.type		= EXPR_RANGE_SYMBOL,
+	.name		= "range_symbol",
+	.print		= symbol_range_expr_print,
+	.clone		= symbol_range_expr_clone,
+	.destroy	= symbol_range_expr_destroy,
+};
+
+struct expr *symbol_range_expr_alloc(const struct location *loc,
+				     enum symbol_types type, const struct scope *scope,
+				     const char *identifier_low, const char *identifier_high)
+{
+	struct expr *expr;
+
+	expr = expr_alloc(loc, EXPR_RANGE_SYMBOL, &invalid_type,
+			  BYTEORDER_INVALID, 0);
+	expr->symtype	 = type;
+	expr->scope	 = scope;
+	expr->identifier_range[0] = xstrdup(identifier_low);
+	expr->identifier_range[1] = xstrdup(identifier_high);
+	return expr;
 }
 
 /*
@@ -750,6 +945,17 @@ void relational_expr_pctx_update(struct proto_ctx *ctx,
 				    i->key->etype == EXPR_VALUE)
 					ops->pctx_update(ctx, &expr->location, left, i->key);
 			}
+		} else if (ops == &meta_expr_ops &&
+			   right->etype == EXPR_SET_REF) {
+			const struct expr *key = right->set->key;
+			struct expr *tmp;
+
+			tmp = constant_expr_alloc(&expr->location, key->dtype,
+						  key->byteorder, key->len,
+						  NULL);
+
+			ops->pctx_update(ctx, &expr->location, left, tmp);
+			expr_free(tmp);
 		}
 	}
 }
@@ -883,7 +1089,7 @@ static struct expr *expr_build_udata_recurse(struct expr *e)
 {
 	switch (e->etype) {
 	case EXPR_BINOP:
-		return e->left;
+		return expr_build_udata_recurse(e->left);
 	default:
 		break;
 	}
@@ -1057,10 +1263,42 @@ struct expr *list_expr_alloc(const struct location *loc)
 	return compound_expr_alloc(loc, EXPR_LIST);
 }
 
-static const char *calculate_delim(const struct expr *expr, int *count)
+/* list is assumed to have two items at least, otherwise extend this! */
+struct expr *list_expr_to_binop(struct expr *expr)
+{
+	struct expr *first, *last = NULL, *i;
+
+	assert(!list_empty(&expr->expressions));
+
+	first = list_first_entry(&expr->expressions, struct expr, list);
+	i = first;
+
+	list_for_each_entry_continue(i, &expr->expressions, list) {
+		if (first) {
+			last = binop_expr_alloc(&expr->location, OP_OR, first, i);
+			first = NULL;
+		} else {
+			last = binop_expr_alloc(&expr->location, OP_OR, i, last);
+		}
+	}
+	/* list with one single item only, this should not happen. */
+	assert(!first);
+
+	/* zap list expressions, they have been moved to binop expression. */
+	init_list_head(&expr->expressions);
+	expr_free(expr);
+
+	return last;
+}
+
+static const char *calculate_delim(const struct expr *expr, int *count,
+				   struct output_ctx *octx)
 {
 	const char *newline = ",\n\t\t\t     ";
 	const char *singleline = ", ";
+
+	if (octx->force_newline)
+		return newline;
 
 	if (set_is_anonymous(expr->set_flags))
 		return singleline;
@@ -1114,7 +1352,7 @@ static void set_expr_print(const struct expr *expr, struct output_ctx *octx)
 		nft_print(octx, "%s", d);
 		expr_print(i, octx);
 		count++;
-		d = calculate_delim(expr, &count);
+		d = calculate_delim(expr, &count, octx);
 	}
 
 	nft_print(octx, " }");
@@ -1290,6 +1528,32 @@ static void set_ref_expr_destroy(struct expr *expr)
 	set_free(expr->set);
 }
 
+static void set_ref_expr_set_type(const struct expr *expr,
+				  const struct datatype *dtype,
+				  enum byteorder byteorder)
+{
+	const struct set *s = expr->set;
+
+	/* normal sets already have a precise datatype that is given in
+	 * the set definition via type foo.
+	 *
+	 * Anon sets do not have this, and need to rely on type info
+	 * generated at rule creation time.
+	 *
+	 * For most cases, the type info is correct.
+	 * In some cases however, the kernel only stores TYPE_INTEGER.
+	 *
+	 * This happens with expressions that only use an integer alias
+	 * type, e.g. the mptcpopt_subtype datatype.
+	 *
+	 * In this case nft will print the elements as numerical values
+	 * because the base type lacks the ->sym_tbl information of the
+	 * subtypes.
+	 */
+	if (s->init && set_is_anonymous(s->flags))
+		expr_set_type(s->init, dtype, byteorder);
+}
+
 static const struct expr_ops set_ref_expr_ops = {
 	.type		= EXPR_SET_REF,
 	.name		= "set reference",
@@ -1297,6 +1561,7 @@ static const struct expr_ops set_ref_expr_ops = {
 	.json		= set_ref_expr_json,
 	.clone		= set_ref_expr_clone,
 	.destroy	= set_ref_expr_destroy,
+	.set_type	= set_ref_expr_set_type,
 };
 
 struct expr *set_ref_expr_alloc(const struct location *loc, struct set *set)
@@ -1321,9 +1586,14 @@ static void set_elem_expr_print(const struct expr *expr,
 	}
 	if (expr->timeout) {
 		nft_print(octx, " timeout ");
-		time_print(expr->timeout, octx);
+		if (expr->timeout == NFT_NEVER_TIMEOUT)
+			nft_print(octx, "never");
+		else
+			time_print(expr->timeout, octx);
 	}
-	if (!nft_output_stateless(octx) && expr->expiration) {
+	if (!nft_output_stateless(octx) &&
+	    expr->timeout != NFT_NEVER_TIMEOUT &&
+	    expr->expiration) {
 		nft_print(octx, " expires ");
 		time_print(expr->expiration, octx);
 	}
@@ -1335,7 +1605,7 @@ static void set_elem_expr_destroy(struct expr *expr)
 {
 	struct stmt *stmt, *next;
 
-	xfree(expr->comment);
+	free_const(expr->comment);
 	expr_free(expr->key);
 	list_for_each_entry_safe(stmt, next, &expr->stmt_list, list)
 		stmt_free(stmt);
@@ -1356,6 +1626,13 @@ static void set_elem_expr_clone(struct expr *new, const struct expr *expr)
 	__set_elem_expr_clone(new, expr);
 }
 
+static void set_elem_expr_set_type(const struct expr *expr,
+				   const struct datatype *dtype,
+				   enum byteorder byteorder)
+{
+       expr_set_type(expr->key, dtype, byteorder);
+}
+
 static const struct expr_ops set_elem_expr_ops = {
 	.type		= EXPR_SET_ELEM,
 	.name		= "set element",
@@ -1363,6 +1640,7 @@ static const struct expr_ops set_elem_expr_ops = {
 	.print		= set_elem_expr_print,
 	.json		= set_elem_expr_json,
 	.destroy	= set_elem_expr_destroy,
+	.set_type	= set_elem_expr_set_type,
 };
 
 struct expr *set_elem_expr_alloc(const struct location *loc, struct expr *key)
@@ -1407,66 +1685,13 @@ struct expr *set_elem_catchall_expr_alloc(const struct location *loc)
 	return expr;
 }
 
-static void flagcmp_expr_print(const struct expr *expr, struct output_ctx *octx)
-{
-	expr_print(expr->flagcmp.expr, octx);
-
-	if (expr->op == OP_NEQ)
-		nft_print(octx, " != ");
-	else
-		nft_print(octx, " ");
-
-	expr_print(expr->flagcmp.value, octx);
-	nft_print(octx, " / ");
-	expr_print(expr->flagcmp.mask, octx);
-}
-
-static void flagcmp_expr_clone(struct expr *new, const struct expr *expr)
-{
-	new->flagcmp.expr = expr_clone(expr->flagcmp.expr);
-	new->flagcmp.mask = expr_clone(expr->flagcmp.mask);
-	new->flagcmp.value = expr_clone(expr->flagcmp.value);
-}
-
-static void flagcmp_expr_destroy(struct expr *expr)
-{
-	expr_free(expr->flagcmp.expr);
-	expr_free(expr->flagcmp.mask);
-	expr_free(expr->flagcmp.value);
-}
-
-static const struct expr_ops flagcmp_expr_ops = {
-	.type		= EXPR_FLAGCMP,
-	.name		= "flags comparison",
-	.print		= flagcmp_expr_print,
-	.json		= flagcmp_expr_json,
-	.clone		= flagcmp_expr_clone,
-	.destroy	= flagcmp_expr_destroy,
-};
-
-struct expr *flagcmp_expr_alloc(const struct location *loc, enum ops op,
-				struct expr *match, struct expr *mask,
-				struct expr *value)
-{
-	struct expr *expr;
-
-	expr = expr_alloc(loc, EXPR_FLAGCMP, match->dtype, match->byteorder,
-			  match->len);
-	expr->op = op;
-	expr->flagcmp.expr = match;
-	expr->flagcmp.mask = mask;
-	/* json output needs this operation for compatibility */
-	expr->flagcmp.mask->op = OP_OR;
-	expr->flagcmp.value = value;
-
-	return expr;
-}
-
 void range_expr_value_low(mpz_t rop, const struct expr *expr)
 {
 	switch (expr->etype) {
 	case EXPR_VALUE:
 		return mpz_set(rop, expr->value);
+	case EXPR_RANGE_VALUE:
+		return mpz_set(rop, expr->range.low);
 	case EXPR_PREFIX:
 		return range_expr_value_low(rop, expr->prefix);
 	case EXPR_RANGE:
@@ -1487,6 +1712,8 @@ void range_expr_value_high(mpz_t rop, const struct expr *expr)
 	switch (expr->etype) {
 	case EXPR_VALUE:
 		return mpz_set(rop, expr->value);
+	case EXPR_RANGE_VALUE:
+		return mpz_set(rop, expr->range.high);
 	case EXPR_PREFIX:
 		range_expr_value_low(rop, expr->prefix);
 		assert(expr->len >= expr->prefix_len);
@@ -1537,7 +1764,9 @@ static const struct expr_ops *__expr_ops_by_type(enum expr_types etype)
 	case EXPR_FIB: return &fib_expr_ops;
 	case EXPR_XFRM: return &xfrm_expr_ops;
 	case EXPR_SET_ELEM_CATCHALL: return &set_elem_catchall_expr_ops;
-	case EXPR_FLAGCMP: return &flagcmp_expr_ops;
+	case EXPR_RANGE_VALUE: return &constant_range_expr_ops;
+	case EXPR_RANGE_SYMBOL: return &symbol_range_expr_ops;
+	case __EXPR_MAX: break;
 	}
 
 	return NULL;

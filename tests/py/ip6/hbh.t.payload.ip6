@@ -11,8 +11,7 @@ ip6 test-ip6 filter-input
 # hbh hdrlength 33-45
 ip6 test-ip6 filter-input
   [ exthdr load ipv6 1b @ 0 + 1 => reg 1 ]
-  [ cmp gte reg 1 0x00000021 ]
-  [ cmp lte reg 1 0x0000002d ]
+  [ range eq reg 1 0x00000021 0x0000002d ]
 
 # hbh hdrlength != 33-45
 ip6 test-ip6 filter-input
@@ -64,8 +63,7 @@ ip6 test-ip6 filter-input
 # hbh nexthdr 33-45
 ip6 test-ip6 filter-input
   [ exthdr load ipv6 1b @ 0 + 0 => reg 1 ]
-  [ cmp gte reg 1 0x00000021 ]
-  [ cmp lte reg 1 0x0000002d ]
+  [ range eq reg 1 0x00000021 0x0000002d ]
 
 # hbh nexthdr != 33-45
 ip6 test-ip6 filter-input

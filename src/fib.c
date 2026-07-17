@@ -179,7 +179,7 @@ struct expr *fib_expr_alloc(const struct location *loc,
 		type = &ifindex_type;
 		break;
 	case NFT_FIB_RESULT_OIFNAME:
-		type = &string_type;
+		type = &ifname_type;
 		len = IFNAMSIZ * BITS_PER_BYTE;
 		break;
 	case NFT_FIB_RESULT_ADDRTYPE:

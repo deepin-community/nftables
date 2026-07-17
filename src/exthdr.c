@@ -269,7 +269,7 @@ static void exthdr_stmt_destroy(struct stmt *stmt)
 	expr_free(stmt->exthdr.val);
 }
 
-static const struct stmt_ops exthdr_stmt_ops = {
+const struct stmt_ops exthdr_stmt_ops = {
 	.type		= STMT_EXTHDR,
 	.name		= "exthdr",
 	.print		= exthdr_stmt_print,
@@ -450,13 +450,23 @@ const struct exthdr_desc exthdr_hbh = {
  * Routing header
  */
 
+/* similar to uapi/linux/ipv6.h */
+struct ip6_rt2_hdr {
+	struct ip6_rthdr	rt_hdr;
+	uint32_t		reserved;
+	struct in6_addr		addr;
+};
+
+#define RT2_FIELD(__name, __member, __dtype) \
+	HDR_TEMPLATE(__name, __dtype, struct ip6_rt2_hdr, __member)
+
 const struct exthdr_desc exthdr_rt2 = {
 	.name           = "rt2",
 	.id		= EXTHDR_DESC_RT2,
 	.type           = IPPROTO_ROUTING,
 	.templates	= {
-		[RT2HDR_RESERVED]	= {},
-		[RT2HDR_ADDR]		= {},
+		[RT2HDR_RESERVED]	= RT2_FIELD("reserved", reserved, &integer_type),
+		[RT2HDR_ADDR]		= RT2_FIELD("addr", addr, &ip6addr_type),
 	},
 };
 

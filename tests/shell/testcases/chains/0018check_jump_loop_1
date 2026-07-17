@@ -3,7 +3,7 @@
 set -e
 
 $NFT add table ip filter
-$NFT add chain ip filter ap1
+$NFT add chain ip filter ap1 "{ type filter hook input priority 0; }"
 $NFT add chain ip filter ap2
 $NFT add rule ip filter ap1 jump ap2
 

@@ -1,5 +1,7 @@
 #!/bin/bash
 
+# NFT_TEST_REQUIRES(NFT_TEST_HAVE_pipapo)
+
 dumpfile=$(dirname $0)/dumps/$(basename $0).nft
 
 [ -z "$NFT" ] && exit 111
@@ -103,9 +105,66 @@ check_matching_icmp_ppp()
 	fi
 }
 
+check_add_del_ifnames()
+{
+	local what="$1"
+	local setname="$2"
+	local prefix="$3"
+	local data="$4"
+	local i=0
+
+	for i in $(seq 1 5);do
+		local cmd="element inet testifsets $setname { "
+		local to_batch=16
+
+		for j in $(seq 1 $to_batch);do
+			local name=$(printf '"%x-%d"' $i $j)
+
+			[ -n "$prefix" ] && cmd="$cmd $prefix . "
+
+			cmd="$cmd $name"
+
+			[ -n "$data" ] && cmd="$cmd : $data"
+
+			if [ $j -lt $to_batch ] ; then
+				cmd="$cmd, "
+			fi
+		done
+
+		cmd="$cmd }"
+
+		if ! $NFT "$what" "$cmd"; then
+			echo "$what $cmd failed."
+			$NFT list set inet testifsets $setname
+			exit 1
+		fi
+
+		if ! ip netns exec "$ns1" $NFT "$what" "$cmd"; then
+			echo "$ns1 $what $cmd failed."
+			ip netns exec "$ns1" $NFT list set inet testifsets $setname
+			exit 1
+		fi
+	done
+}
+
+check_add_ifnames()
+{
+	check_add_del_ifnames "add" "$1" "$2" "$3"
+}
+
+check_del_ifnames()
+{
+	check_add_del_ifnames "delete" "$1" "$2" "$3"
+}
+
 ip netns add "$ns1" || exit 111
 ip netns add "$ns2" || exit 111
 ip netns exec "$ns1" $NFT -f "$dumpfile" || exit 3
+
+check_add_ifnames "simple" "" ""
+check_add_ifnames "simple_wild" "" ""
+check_add_ifnames "concat" "10.1.2.2" ""
+check_add_ifnames "map_wild" "" "drop"
 
 for n in abcdef0 abcdef1 othername;do
 	check_elem simple $n
@@ -148,3 +207,8 @@ ip -net "$ns2" addr add 10.1.2.2/24 dev veth0
 ip -net "$ns2" addr add 10.2.2.2/24 dev veth1
 
 check_matching_icmp_ppp
+
+check_del_ifnames "simple" "" ""
+check_del_ifnames "simple_wild" "" ""
+check_del_ifnames "concat" "10.1.2.2" ""
+check_del_ifnames "map_wild" "" "drop"

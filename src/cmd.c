@@ -17,14 +17,15 @@
 #include <errno.h>
 #include <cache.h>
 
-void cmd_add_loc(struct cmd *cmd, uint16_t offset, const struct location *loc)
+void cmd_add_loc(struct cmd *cmd, const struct nlmsghdr *nlh, const struct location *loc)
 {
 	if (cmd->num_attrs >= cmd->attr_array_len) {
 		cmd->attr_array_len *= 2;
 		cmd->attr = xrealloc(cmd->attr, sizeof(struct nlerr_loc) * cmd->attr_array_len);
 	}
 
-	cmd->attr[cmd->num_attrs].offset = offset;
+	cmd->attr[cmd->num_attrs].seqnum = nlh->nlmsg_seq;
+	cmd->attr[cmd->num_attrs].offset = nlh->nlmsg_len;
 	cmd->attr[cmd->num_attrs].location = loc;
 	cmd->num_attrs++;
 }
@@ -41,7 +42,7 @@ static int nft_cmd_enoent_table(struct netlink_ctx *ctx, const struct cmd *cmd,
 	if (!table)
 		return 0;
 
-	netlink_io_error(ctx, loc, "%s; did you mean table ‘%s’ in family %s?",
+	netlink_io_error(ctx, loc, "%s; did you mean table '%s' in family %s?",
 			 strerror(ENOENT), table->handle.table.name,
 			 family2str(table->handle.family));
 	return 1;
@@ -57,7 +58,7 @@ static int table_fuzzy_check(struct netlink_ctx *ctx, const struct cmd *cmd,
 	if (strcmp(cmd->handle.table.name, table->handle.table.name) ||
 	    cmd->handle.family != table->handle.family) {
 		netlink_io_error(ctx, &cmd->handle.table.location,
-				 "%s; did you mean table ‘%s’ in family %s?",
+				 "%s; did you mean table '%s' in family %s?",
 				 strerror(ENOENT), table->handle.table.name,
 				 family2str(table->handle.family));
 		return 1;
@@ -75,6 +76,10 @@ static int nft_cmd_enoent_chain(struct netlink_ctx *ctx, const struct cmd *cmd,
 	if (!cmd->handle.chain.name)
 		return 0;
 
+	if (nft_cache_update(ctx->nft, NFT_CACHE_TABLE | NFT_CACHE_CHAIN,
+			     ctx->msgs, NULL) < 0)
+		return 0;
+
 	chain = chain_lookup_fuzzy(&cmd->handle, &ctx->nft->cache, &table);
 	/* check table first. */
 	if (!table)
@@ -86,7 +91,7 @@ static int nft_cmd_enoent_chain(struct netlink_ctx *ctx, const struct cmd *cmd,
 	if (!chain)
 		return 0;
 
-	netlink_io_error(ctx, loc, "%s; did you mean chain ‘%s’ in table %s ‘%s’?",
+	netlink_io_error(ctx, loc, "%s; did you mean chain '%s' in table %s '%s'?",
 			 strerror(ENOENT), chain->handle.chain.name,
 			 family2str(table->handle.family),
 			 table->handle.table.name);
@@ -116,7 +121,7 @@ static int nft_cmd_enoent_rule(struct netlink_ctx *ctx, const struct cmd *cmd,
 		return 0;
 
 	if (strcmp(cmd->handle.chain.name, chain->handle.chain.name)) {
-		netlink_io_error(ctx, loc, "%s; did you mean chain ‘%s’ in table %s ‘%s’?",
+		netlink_io_error(ctx, loc, "%s; did you mean chain '%s' in table %s '%s'?",
 				 strerror(ENOENT),
 				 chain->handle.chain.name,
 				 family2str(table->handle.family),
@@ -136,6 +141,10 @@ static int nft_cmd_enoent_set(struct netlink_ctx *ctx, const struct cmd *cmd,
 	if (!cmd->handle.set.name)
 		return 0;
 
+	if (nft_cache_update(ctx->nft, NFT_CACHE_TABLE | NFT_CACHE_SET,
+			     ctx->msgs, NULL) < 0)
+		return 0;
+
 	set = set_lookup_fuzzy(cmd->handle.set.name, &ctx->nft->cache, &table);
 	/* check table first. */
 	if (!table)
@@ -147,7 +156,7 @@ static int nft_cmd_enoent_set(struct netlink_ctx *ctx, const struct cmd *cmd,
 	if (!set)
 		return 0;
 
-	netlink_io_error(ctx, loc, "%s; did you mean %s ‘%s’ in table %s ‘%s’?",
+	netlink_io_error(ctx, loc, "%s; did you mean %s '%s' in table %s '%s'?",
 			 strerror(ENOENT),
 			 set_is_map(set->flags) ? "map" : "set",
 			 set->handle.set.name,
@@ -165,6 +174,10 @@ static int nft_cmd_enoent_obj(struct netlink_ctx *ctx, const struct cmd *cmd,
 	if (!cmd->handle.obj.name)
 		return 0;
 
+	if (nft_cache_update(ctx->nft, NFT_CACHE_TABLE | NFT_CACHE_OBJECT,
+			     ctx->msgs, NULL) < 0)
+		return 0;
+
 	obj = obj_lookup_fuzzy(cmd->handle.obj.name, &ctx->nft->cache, &table);
 	/* check table first. */
 	if (!table)
@@ -176,7 +189,7 @@ static int nft_cmd_enoent_obj(struct netlink_ctx *ctx, const struct cmd *cmd,
 	if (!obj)
 		return 0;
 
-	netlink_io_error(ctx, loc, "%s; did you mean obj ‘%s’ in table %s ‘%s’?",
+	netlink_io_error(ctx, loc, "%s; did you mean obj '%s' in table %s '%s'?",
 			 strerror(ENOENT), obj->handle.obj.name,
 			 family2str(obj->handle.family),
 			 table->handle.table.name);
@@ -193,6 +206,10 @@ static int nft_cmd_enoent_flowtable(struct netlink_ctx *ctx,
 	if (!cmd->handle.flowtable.name)
 		return 0;
 
+	if (nft_cache_update(ctx->nft, NFT_CACHE_TABLE | NFT_CACHE_FLOWTABLE,
+			     ctx->msgs, NULL) < 0)
+		return 0;
+
 	ft = flowtable_lookup_fuzzy(cmd->handle.flowtable.name,
 				    &ctx->nft->cache, &table);
 	/* check table first. */
@@ -205,7 +222,7 @@ static int nft_cmd_enoent_flowtable(struct netlink_ctx *ctx,
 	if (!ft)
 		return 0;
 
-	netlink_io_error(ctx, loc, "%s; did you mean flowtable ‘%s’ in table %s ‘%s’?",
+	netlink_io_error(ctx, loc, "%s; did you mean flowtable '%s' in table %s '%s'?",
 			 strerror(ENOENT), ft->handle.flowtable.name,
 			 family2str(ft->handle.family),
 			 table->handle.table.name);
@@ -256,7 +273,8 @@ static void nft_cmd_enoent(struct netlink_ctx *ctx, const struct cmd *cmd,
 static int nft_cmd_chain_error(struct netlink_ctx *ctx, struct cmd *cmd,
 			       struct mnl_err *err)
 {
-	struct chain *chain = cmd->chain;
+	struct chain *chain = cmd->chain, *existing_chain;
+	const struct table *table;
 	int priority;
 
 	switch (err->err) {
@@ -269,6 +287,25 @@ static int nft_cmd_chain_error(struct netlink_ctx *ctx, struct cmd *cmd,
 		if (priority <= -200 && !strcmp(chain->type.str, "nat"))
 			return netlink_io_error(ctx, &chain->priority.loc,
 						"Chains of type \"nat\" must have a priority value above -200");
+
+		if (nft_cache_update(ctx->nft, NFT_CACHE_TABLE | NFT_CACHE_CHAIN,
+				     ctx->msgs, NULL) < 0) {
+			return netlink_io_error(ctx, &chain->loc,
+						"Chain of type \"%s\" is not supported, perhaps kernel support is missing?",
+						chain->type.str);
+		}
+
+		table = table_cache_find(&ctx->nft->cache.table_cache,
+					 cmd->handle.table.name, cmd->handle.family);
+		if (table) {
+			existing_chain = chain_cache_find(table, cmd->handle.chain.name);
+			if (existing_chain && existing_chain != chain &&
+			    !strcmp(existing_chain->handle.chain.name, chain->handle.chain.name))
+				return netlink_io_error(ctx, &chain->loc,
+							"Chain \"%s\" already exists in table %s '%s' with different declaration",
+							chain->handle.chain.name,
+							family2str(table->handle.family), table->handle.table.name);
+		}
 
 		return netlink_io_error(ctx, &chain->loc,
 					"Chain of type \"%s\" is not supported, perhaps kernel support is missing?",
@@ -287,9 +324,8 @@ void nft_cmd_error(struct netlink_ctx *ctx, struct cmd *cmd,
 	uint32_t i;
 
 	for (i = 0; i < cmd->num_attrs; i++) {
-		if (!cmd->attr[i].offset)
-			break;
-		if (cmd->attr[i].offset == err->offset)
+		if (cmd->attr[i].seqnum == err->seqnum &&
+		    cmd->attr[i].offset == err->offset)
 			loc = cmd->attr[i].location;
 	}
 
@@ -309,6 +345,12 @@ void nft_cmd_error(struct netlink_ctx *ctx, struct cmd *cmd,
 		break;
 	default:
 		break;
+	}
+
+	if (cmd->op == CMD_DESTROY && err->err == EINVAL) {
+		netlink_io_error(ctx, loc,
+				 "\"destroy\" command is not supported, perhaps kernel support is missing?");
+		return;
 	}
 
 	netlink_io_error(ctx, loc, "Could not process rule: %s",
@@ -334,6 +376,32 @@ static void nft_cmd_expand_chain(struct chain *chain, struct list_head *new_cmds
 				&rule->location, rule);
 		list_add_tail(&new->list, new_cmds);
 	}
+}
+
+bool nft_cmd_collapse_elems(enum cmd_ops op, struct list_head *cmds,
+			    struct handle *handle, struct expr *init)
+{
+	struct cmd *last_cmd;
+
+	if (list_empty(cmds))
+		return false;
+
+	if (init->etype == EXPR_VARIABLE)
+		return false;
+
+	last_cmd = list_last_entry(cmds, struct cmd, list);
+	if (last_cmd->op != op ||
+	    last_cmd->obj != CMD_OBJ_ELEMENTS ||
+	    last_cmd->expr->etype == EXPR_VARIABLE ||
+	    last_cmd->handle.family != handle->family ||
+	    strcmp(last_cmd->handle.table.name, handle->table.name) ||
+	    strcmp(last_cmd->handle.set.name, handle->set.name))
+		return false;
+
+	list_splice_tail_init(&init->expressions, &last_cmd->expr->expressions);
+	last_cmd->expr->size += init->size;
+
+	return true;
 }
 
 void nft_cmd_expand(struct cmd *cmd)
@@ -415,81 +483,5 @@ void nft_cmd_expand(struct cmd *cmd)
 		break;
 	default:
 		break;
-	}
-}
-
-bool nft_cmd_collapse(struct list_head *cmds)
-{
-	struct cmd *cmd, *next, *elems = NULL;
-	struct expr *expr, *enext;
-	bool collapse = false;
-
-	list_for_each_entry_safe(cmd, next, cmds, list) {
-		if (cmd->op != CMD_ADD &&
-		    cmd->op != CMD_CREATE) {
-			elems = NULL;
-			continue;
-		}
-
-		if (cmd->obj != CMD_OBJ_ELEMENTS) {
-			elems = NULL;
-			continue;
-		}
-
-		if (!elems) {
-			elems = cmd;
-			continue;
-		}
-
-		if (cmd->op != elems->op) {
-			elems = cmd;
-			continue;
-		}
-
-		if (elems->handle.family != cmd->handle.family ||
-		    strcmp(elems->handle.table.name, cmd->handle.table.name) ||
-		    strcmp(elems->handle.set.name, cmd->handle.set.name)) {
-			elems = cmd;
-			continue;
-		}
-
-		collapse = true;
-		list_for_each_entry_safe(expr, enext, &cmd->expr->expressions, list) {
-			expr->cmd = cmd;
-			list_move_tail(&expr->list, &elems->expr->expressions);
-		}
-		elems->expr->size += cmd->expr->size;
-		list_move_tail(&cmd->list, &elems->collapse_list);
-	}
-
-	return collapse;
-}
-
-void nft_cmd_uncollapse(struct list_head *cmds)
-{
-	struct cmd *cmd, *cmd_next, *collapse_cmd, *collapse_cmd_next;
-	struct expr *expr, *next;
-
-	list_for_each_entry_safe(cmd, cmd_next, cmds, list) {
-		if (list_empty(&cmd->collapse_list))
-			continue;
-
-		assert(cmd->obj == CMD_OBJ_ELEMENTS);
-
-		list_for_each_entry_safe(expr, next, &cmd->expr->expressions, list) {
-			if (!expr->cmd)
-				continue;
-
-			list_move_tail(&expr->list, &expr->cmd->expr->expressions);
-			cmd->expr->size--;
-			expr->cmd = NULL;
-		}
-
-		list_for_each_entry_safe(collapse_cmd, collapse_cmd_next, &cmd->collapse_list, list) {
-			if (cmd->elem.set)
-				collapse_cmd->elem.set = set_get(cmd->elem.set);
-
-			list_add(&collapse_cmd->list, &cmd->list);
-		}
 	}
 }

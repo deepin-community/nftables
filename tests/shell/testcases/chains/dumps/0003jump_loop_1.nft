@@ -1,5 +1,6 @@
 table ip t {
 	chain c1 {
+		type filter hook prerouting priority filter; policy accept;
 		jump c2
 	}
 

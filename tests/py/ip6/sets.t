@@ -46,3 +46,6 @@ add @set5 { ip6 saddr . ip6 daddr };ok
 add @map1 { ip6 saddr . ip6 daddr : meta mark };ok
 
 delete @set5 { ip6 saddr . ip6 daddr };ok
+
+!map2 type ipv6_addr . ipv6_addr . inet_service : ipv6_addr . inet_service;ok
+add @map2 { ip6 saddr . ip6 daddr . th dport : 1234::1 . 80 };ok

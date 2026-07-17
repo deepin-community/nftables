@@ -560,6 +560,29 @@
     }
 ]
 
+# ct mark set 0x00000001 or ct mark
+[
+    {
+        "mangle": {
+            "key": {
+                "ct": {
+                    "key": "mark"
+                }
+            },
+            "value": {
+                "|": [
+                    {
+                        "ct": {
+                            "key": "mark"
+                        }
+                    },
+                    1
+                ]
+            }
+        }
+    }
+]
+
 # ct mark 0x00000032
 [
     {
@@ -812,6 +835,43 @@
                         ]
                     }
                 }
+            }
+        }
+    }
+]
+
+# ct mark set ct mark and 0xffff0000 or meta mark and 0xffff
+[
+    {
+        "mangle": {
+            "key": {
+                "ct": {
+                    "key": "mark"
+                }
+            },
+            "value": {
+                "|": [
+                    {
+                        "&": [
+                            {
+                                "ct": {
+                                    "key": "mark"
+                                }
+                            },
+                            4294901760
+                        ]
+                    },
+                    {
+                        "&": [
+                            {
+                                "meta": {
+                                    "key": "mark"
+                                }
+                            },
+                            65535
+                        ]
+                    }
+                ]
             }
         }
     }

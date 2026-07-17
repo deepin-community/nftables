@@ -62,7 +62,8 @@ static void payload_expr_print(const struct expr *expr, struct output_ctx *octx)
 
 bool payload_expr_cmp(const struct expr *e1, const struct expr *e2)
 {
-	return e1->payload.desc   == e2->payload.desc &&
+	return e1->payload.inner_desc == e2->payload.inner_desc &&
+	       e1->payload.desc   == e2->payload.desc &&
 	       e1->payload.tmpl   == e2->payload.tmpl &&
 	       e1->payload.base   == e2->payload.base &&
 	       e1->payload.offset == e2->payload.offset;
@@ -118,11 +119,10 @@ static void payload_expr_pctx_update(struct proto_ctx *ctx,
 
 	assert(desc->base <= PROTO_BASE_MAX);
 	if (desc->base == base->base) {
-		assert(base->length > 0);
-
 		if (!left->payload.is_raw) {
 			if (desc->base == PROTO_BASE_LL_HDR &&
 			    ctx->stacked_ll_count < PROTO_CTX_NUM_PROTOS) {
+				assert(base->length > 0);
 				ctx->stacked_ll[ctx->stacked_ll_count] = base;
 				ctx->stacked_ll_count++;
 			}
@@ -354,7 +354,6 @@ void payload_init_raw(struct expr *expr, enum proto_bases base,
 		expr->payload.tmpl = &proto_th.templates[thf];
 		expr->payload.desc = &proto_th;
 		expr->dtype = &inet_service_type;
-		expr->payload.desc = &proto_th;
 		break;
 	default:
 		break;
@@ -379,7 +378,7 @@ static void payload_stmt_destroy(struct stmt *stmt)
 	expr_free(stmt->payload.val);
 }
 
-static const struct stmt_ops payload_stmt_ops = {
+const struct stmt_ops payload_stmt_ops = {
 	.type		= STMT_PAYLOAD,
 	.name		= "payload",
 	.print		= payload_stmt_print,
@@ -407,7 +406,6 @@ static int payload_add_dependency(struct eval_ctx *ctx,
 	const struct proto_hdr_template *tmpl;
 	struct expr *dep, *left, *right;
 	struct proto_ctx *pctx;
-	unsigned int stmt_len;
 	struct stmt *stmt;
 	int protocol;
 
@@ -429,15 +427,9 @@ static int payload_add_dependency(struct eval_ctx *ctx,
 
 	dep = relational_expr_alloc(&expr->location, OP_EQ, left, right);
 
-	stmt_len = ctx->stmt_len;
-	ctx->stmt_len = 0;
-
 	stmt = expr_stmt_alloc(&dep->location, dep);
-	if (stmt_evaluate(ctx, stmt) < 0) {
-		return expr_error(ctx->msgs, expr,
-					  "dependency statement is invalid");
-	}
-	ctx->stmt_len = stmt_len;
+	if (stmt_dependency_evaluate(ctx, stmt) < 0)
+		return -1;
 
 	if (ctx->inner_desc) {
 		if (tmpl->meta_key)
@@ -547,7 +539,6 @@ int payload_gen_dependency(struct eval_ctx *ctx, const struct expr *expr,
 	const struct hook_proto_desc *h;
 	const struct proto_desc *desc;
 	struct proto_ctx *pctx;
-	unsigned int stmt_len;
 	struct stmt *stmt;
 	uint16_t type;
 
@@ -564,17 +555,11 @@ int payload_gen_dependency(struct eval_ctx *ctx, const struct expr *expr,
 					  "protocol specification is invalid "
 					  "for this family");
 
-		stmt_len = ctx->stmt_len;
-		ctx->stmt_len = 0;
-
 		stmt = meta_stmt_meta_iiftype(&expr->location, type);
-		if (stmt_evaluate(ctx, stmt) < 0) {
-			return expr_error(ctx->msgs, expr,
-					  "dependency statement is invalid");
-		}
-		*res = stmt;
+		if (stmt_dependency_evaluate(ctx, stmt) < 0)
+			return -1;
 
-		ctx->stmt_len = stmt_len;
+		*res = stmt;
 
 		return 0;
 	}
@@ -827,7 +812,7 @@ static bool icmp_dep_type_match(enum icmp_hdr_field_type t, uint8_t type)
 	BUG("Missing icmp type mapping");
 }
 
-static bool payload_may_dependency_kill_icmp(struct payload_dep_ctx *ctx, struct expr *expr)
+static bool payload_may_dependency_kill_icmp(struct payload_dep_ctx *ctx, const struct expr *expr)
 {
 	const struct expr *dep = payload_dependency_get(ctx, expr->payload.base);
 	enum icmp_hdr_field_type icmp_dep;
@@ -847,7 +832,7 @@ static bool payload_may_dependency_kill_icmp(struct payload_dep_ctx *ctx, struct
 	return ctx->icmp_type == icmp_dep_to_type(icmp_dep);
 }
 
-static bool payload_may_dependency_kill_ll(struct payload_dep_ctx *ctx, struct expr *expr)
+static bool payload_may_dependency_kill_ll(struct payload_dep_ctx *ctx, const struct expr *expr)
 {
 	const struct expr *dep = payload_dependency_get(ctx, expr->payload.base);
 
@@ -909,7 +894,20 @@ static bool payload_may_dependency_kill(struct payload_dep_ctx *ctx,
 	if (expr->payload.base != PROTO_BASE_TRANSPORT_HDR)
 		return true;
 
-	if (dep->left->payload.base != PROTO_BASE_TRANSPORT_HDR)
+	if (expr->payload.desc == &proto_th) {
+		/* &proto_th could mean any of udp, tcp, dccp, ... so we
+		 * cannot remove the dependency.
+		 *
+		 * Also prefer raw payload @th syntax, there is no
+		 * 'source/destination port' protocol here.
+		 */
+		expr->payload.desc = &proto_unknown;
+		expr->dtype = &xinteger_type;
+		return false;
+	}
+
+	if (dep->left->etype != EXPR_PAYLOAD ||
+	    dep->left->payload.base != PROTO_BASE_TRANSPORT_HDR)
 		return true;
 
 	if (dep->left->payload.desc == &proto_icmp)
@@ -1061,6 +1059,7 @@ static unsigned int mask_length(const struct expr *mask)
  * @expr:	the payload expression
  * @mask:	mask to use when searching templates
  * @ctx:	protocol context
+ * @shift:	shift adjustment to fix up RHS value
  *
  * Walk the template list and determine if a match can be found without
  * using the provided mask.
@@ -1114,6 +1113,230 @@ bool payload_expr_trim(struct expr *expr, struct expr *mask,
 			expr->payload.offset += off;
 			expr->len = len;
 			*shift = mask_offset;
+			return true;
+		}
+	}
+
+	return false;
+}
+
+/**
+ * payload_expr_trim_force - adjust payload len/offset according to mask
+ *
+ * @expr:	the payload expression
+ * @mask:	mask to use when searching templates
+ * @shift:	shift adjustment to fix up RHS value
+ *
+ * Force-trim an unknown payload expression according to mask.
+ *
+ * This is only useful for unkown payload expressions that need
+ * to be printed in raw syntax (@base,offset,length).  The kernel
+ * can only deal with byte-divisible offsets/length, e.g. @th,16,8.
+ * In such case we might be able to get rid of the mask.
+ * @base,offset,length & MASK OPERATOR VALUE then becomes
+ * @base,offset,length VALUE, where at least one of offset increases
+ * and length decreases.
+ *
+ * This function also returns the shift for the right hand
+ * constant side of the expression.
+ *
+ * @return: true if @expr was adjusted and mask can be discarded.
+ */
+bool payload_expr_trim_force(struct expr *expr, struct expr *mask, unsigned int *shift)
+{
+	unsigned int payload_offset = expr->payload.offset;
+	unsigned int mask_len = mask_length(mask);
+	unsigned int off, real_len;
+
+	if (payload_is_known(expr) || expr->len <= mask_len)
+		return false;
+
+	/* This provides the payload offset to use.
+	 * mask->len is the total length of the mask, e.g. 16.
+	 * mask_len holds the last bit number that will be zeroed,
+	 */
+	off = round_up(mask->len, BITS_PER_BYTE) - mask_len;
+	payload_offset += off;
+
+	/* kernel only allows offsets <= 255 */
+	if (round_up(payload_offset, BITS_PER_BYTE) > 255)
+		return false;
+
+	real_len = mpz_popcount(mask->value);
+	if (real_len > expr->len)
+		return false;
+
+	expr->payload.offset = payload_offset;
+	expr->len = real_len;
+
+	*shift = mask_to_offset(mask);
+	return true;
+}
+
+/**
+ * stmt_payload_expr_trim - adjust payload len/offset according to mask
+ *
+ * @stmt:	the payload statement
+ * @pctx:	protocol context
+ *
+ * Infer offset to header field from mask, walk the template list to determine
+ * if offset falls within a matching header field.
+ *
+ * Trim the payload expression length accordingly, adjust the payload offset
+ * and return true if payload statement expressions has been updated.
+ *
+ * @return: true if @stmt was adjusted.
+ */
+bool stmt_payload_expr_trim(struct stmt *stmt, const struct proto_ctx *pctx)
+{
+	struct expr *expr = stmt->payload.val;
+	const struct proto_hdr_template *tmpl;
+	const struct proto_desc *desc;
+	struct expr *payload, *mask;
+	uint32_t offset, i, shift;
+	unsigned int mask_offset;
+	mpz_t bitmask, tmp, tmp2;
+	unsigned long n;
+
+	assert(stmt->type == STMT_PAYLOAD);
+	assert(expr->etype == EXPR_BINOP);
+
+	payload = expr->left;
+	mask = expr->right;
+
+	if (payload->etype != EXPR_PAYLOAD ||
+	    mask->etype != EXPR_VALUE)
+		return false;
+
+	if (payload_is_known(payload) ||
+	    !pctx->protocol[payload->payload.base].desc ||
+	    payload->len % (2 * BITS_PER_BYTE) != 0)
+		return false;
+
+	switch (expr->op) {
+	case OP_AND:
+		/* infer offset from first 0 in mask */
+		n = mpz_scan0(mask->value, 0);
+		if (n == ULONG_MAX)
+			return false;
+
+		mask_offset = payload->len - n;
+		break;
+	case OP_OR:
+	case OP_XOR:
+		/* infer offset from first 1 in mask */
+		n = mpz_scan1(mask->value, 0);
+		if (n == ULONG_MAX)
+			return false;
+
+		mask_offset = payload->len - n;
+		break;
+	default:
+		return false;
+	}
+
+	offset = payload->payload.offset + mask_offset;
+
+	desc = pctx->protocol[payload->payload.base].desc;
+	for (i = 1; i < array_size(desc->templates); i++) {
+		tmpl = &desc->templates[i];
+
+		if (tmpl->len == 0)
+			return false;
+
+		/* Is this inferred offset within this header field? */
+		if (tmpl->offset + tmpl->len >= offset) {
+			/* Infer shift to reach this header field. */
+			if ((tmpl->offset % (2 * BITS_PER_BYTE)) < 8) {
+				shift = BITS_PER_BYTE - (tmpl->offset % BITS_PER_BYTE + tmpl->len);
+				shift += BITS_PER_BYTE;
+			} else {
+				shift = (2 * BITS_PER_BYTE) - (tmpl->offset % (2 * BITS_PER_BYTE) + tmpl->len);
+			}
+
+			/* Build bitmask to fetch this header field. */
+			mpz_init2(bitmask, payload->len);
+			mpz_bitmask(bitmask, tmpl->len);
+			if (shift)
+				mpz_lshift_ui(bitmask, shift);
+
+			/* Check if mask expression falls within this header
+			 * bitfield, if the mask expression is over this header
+			 * field, then skip this delinearization, this could be
+			 * a raw expression.
+			 */
+			switch (expr->op) {
+			case OP_AND:
+				/* Inverted bitmask to fetch untouched bits. */
+				mpz_init_bitmask(tmp, payload->len);
+				mpz_xor(tmp, bitmask, tmp);
+
+				/* Get untouched bits out of the header field. */
+				mpz_init2(tmp2, payload->len);
+				mpz_and(tmp2, mask->value, tmp);
+
+				/* Modified any bits out of the header field? */
+				if (mpz_cmp(tmp, tmp2) != 0) {
+					mpz_clear(tmp);
+					mpz_clear(tmp2);
+					mpz_clear(bitmask);
+					return false;
+				}
+				mpz_clear(tmp2);
+				break;
+			case OP_OR:
+			case OP_XOR:
+				mpz_init2(tmp, payload->len);
+
+				/* Get modified bits in header field. */
+				mpz_and(tmp, mask->value, bitmask);
+
+				/* Modified any bits out of the header field? */
+				if (mpz_cmp(tmp, mask->value) != 0) {
+					mpz_clear(tmp);
+					mpz_clear(bitmask);
+					return false;
+				}
+				break;
+			default:
+				assert(0);
+				break;
+			}
+			mpz_clear(tmp);
+
+			/* Clear unrelated bits for this header field. Shrink
+			 * to "real size". Shift bits when needed.
+			 */
+			mpz_and(mask->value, bitmask, mask->value);
+			mpz_clear(bitmask);
+
+			mask->len -= (tmpl->offset - payload->payload.offset);
+			if (shift) {
+				mask->len -= shift;
+				mpz_rshift_ui(mask->value, shift);
+			}
+			payload->payload.offset = tmpl->offset;
+			payload->len = tmpl->len;
+
+			expr_free(stmt->payload.expr);
+			stmt->payload.expr = expr_get(payload);
+
+			if (expr->op == OP_AND) {
+				/* Reduce 'expr AND 0x0', otherwise listing
+				 * shows:
+				 *
+				 *	ip dscp set ip dscp & 0x0
+				 *
+				 * instead of the more compact:
+				 *
+				 *	ip dscp set 0x0
+				 */
+				if (mpz_cmp_ui(mask->value, 0) == 0) {
+					expr = stmt->payload.val;
+					stmt->payload.val = expr_get(mask);
+					expr_free(expr);
+				}
+			}
 			return true;
 		}
 	}
@@ -1442,9 +1665,8 @@ int payload_gen_icmp_dependency(struct eval_ctx *ctx, const struct expr *expr,
 
 	pctx->th_dep.icmp.type = type;
 
-	if (stmt_evaluate(ctx, stmt) < 0)
-		return expr_error(ctx->msgs, expr,
-				  "icmp dependency statement is invalid");
+	if (stmt_dependency_evaluate(ctx, stmt) < 0)
+		return -1;
 done:
 	*res = stmt;
 	return 0;

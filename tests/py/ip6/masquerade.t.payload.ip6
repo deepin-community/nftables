@@ -100,8 +100,7 @@ ip6 test-ip6 postrouting
 # ip6 daddr fe00::1-fe00::200 udp dport 53 counter masquerade
 ip6 test-ip6 postrouting
   [ payload load 16b @ network header + 24 => reg 1 ]
-  [ cmp gte reg 1 0x000000fe 0x00000000 0x00000000 0x01000000 ]
-  [ cmp lte reg 1 0x000000fe 0x00000000 0x00000000 0x00020000 ]
+  [ range eq reg 1 0x000000fe 0x00000000 0x00000000 0x01000000 0x000000fe 0x00000000 0x00000000 0x00020000 ]
   [ meta load l4proto => reg 1 ]
   [ cmp eq reg 1 0x00000011 ]
   [ payload load 2b @ transport header + 2 => reg 1 ]

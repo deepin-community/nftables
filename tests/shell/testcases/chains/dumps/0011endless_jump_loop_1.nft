@@ -5,6 +5,7 @@ table ip t {
 	}
 
 	chain c1 {
+		type filter hook forward priority filter; policy accept;
 		tcp dport vmap @m
 	}
 

@@ -43,6 +43,8 @@ understanding of their meaning. You can get information about options by running
 *-f*::
 *--file 'filename'*::
 	Read input from 'filename'. If 'filename' is -, read from stdin.
+	The directory path to this file is inserted at the beginning the list of
+	directories to be searched for included files (see *-I/--includepath*).
 
 *-D*::
 *--define 'name=value'*::
@@ -321,7 +323,7 @@ Effectively, this is the nft-equivalent of *iptables-save* and
 TABLES
 ------
 [verse]
-{*add* | *create*} *table* ['family'] 'table' [ {*comment* 'comment' *;*'} *{ flags* 'flags' *; }*]
+{*add* | *create*} *table* ['family'] 'table' [*{* [*comment* 'comment' *;*] [*flags* 'flags' *;*] *}*]
 {*delete* | *destroy* | *list* | *flush*} *table* ['family'] 'table'
 *list tables* ['family']
 *delete table* ['family'] *handle* 'handle'
@@ -343,7 +345,16 @@ return an error.
 |Flag | Description
 |dormant |
 table is not evaluated any more (base chains are unregistered).
+|owner |
+table is owned by the creating process.
+|persist |
+table shall outlive the owning process.
 |=================
+
+Creating a table with flag *owner* excludes other processes from manipulating
+it or its contents. By default, it will be removed when the process exits.
+Setting flag *persist* will prevent this and the resulting orphaned table will
+accept a new owner, e.g. a restarting daemon maintaining the table.
 
 .*Add, change, delete a table*
 ---------------------------------------
@@ -376,7 +387,7 @@ add table inet mytable
 CHAINS
 ------
 [verse]
-{*add* | *create*} *chain* ['family'] 'table' 'chain' [*{ type* 'type' *hook* 'hook' [*device* 'device'] *priority* 'priority' *;* [*policy* 'policy' *;*] [*comment* 'comment' *;*'] *}*]
+{*add* | *create*} *chain* ['family'] 'table' 'chain' [*{ type* 'type' *hook* 'hook' [*device* 'device'] *priority* 'priority' *;* [*policy* 'policy' *;*] [*comment* 'comment' *;*] *}*]
 {*delete* | *destroy* | *list* | *flush*} *chain* ['family'] 'table' 'chain'
 *list chains* ['family']
 *delete chain* ['family'] 'table' *handle* 'handle'
@@ -412,7 +423,7 @@ Chains of this type perform Native Address Translation based on conntrack
 entries. Only the first packet of a connection actually traverses this chain -
 its rules usually define details of the created conntrack entry (NAT
 statements for instance).
-|route | ip, ip6 | output |
+|route | ip, ip6, inet | output |
 If a packet has traversed a chain of this type and is about to be accepted, a
 new route lookup is performed if relevant parts of the IP header have changed.
 This allows one to e.g. implement policy routing selectors in nftables.
@@ -576,7 +587,7 @@ section describes nft set syntax in more detail.
 [verse]
 *add set* ['family'] 'table' 'set' *{ type* 'type' | *typeof* 'expression' *;* [*flags* 'flags' *;*] [*timeout* 'timeout' *;*] [*gc-interval* 'gc-interval' *;*] [*elements = {* 'element'[*,* ...] *} ;*] [*size* 'size' *;*] [*comment* 'comment' *;*'] [*policy* 'policy' *;*] [*auto-merge ;*] *}*
 {*delete* | *destroy* | *list* | *flush* | *reset* } *set* ['family'] 'table' 'set'
-*list sets* ['family']
+*list sets* ['family'] ['table']
 *delete set* ['family'] 'table' *handle* 'handle'
 {*add* | *delete* | *destroy* } *element* ['family'] 'table' 'set' *{* 'element'[*,* ...] *}*
 
@@ -630,7 +641,7 @@ MAPS
 [verse]
 *add map* ['family'] 'table' 'map' *{ type* 'type' | *typeof* 'expression' [*flags* 'flags' *;*] [*elements = {* 'element'[*,* ...] *} ;*] [*size* 'size' *;*] [*comment* 'comment' *;*'] [*policy* 'policy' *;*] *}*
 {*delete* | *destroy* | *list* | *flush* | *reset* } *map* ['family'] 'table' 'map'
-*list maps* ['family']
+*list maps* ['family'] ['table']
 
 Maps store data based on some specific key used as input. They are uniquely identified by a user-defined name and attached to tables.
 
@@ -727,7 +738,7 @@ FLOWTABLES
 -----------
 [verse]
 {*add* | *create*} *flowtable* ['family'] 'table' 'flowtable' *{ hook* 'hook' *priority* 'priority' *; devices = {* 'device'[*,* ...] *} ; }*
-*list flowtables* ['family']
+*list flowtables* ['family'] ['table']
 {*delete* | *destroy* | *list*} *flowtable* ['family'] 'table' 'flowtable'
 *delete* *flowtable* ['family'] 'table' *handle* 'handle'
 
@@ -738,8 +749,8 @@ protocols. Each entry also caches the destination interface and the gateway
 address - to update the destination link-layer address - to forward packets.
 The ttl and hoplimit fields are also decremented. Hence, flowtables provides an
 alternative path that allow packets to bypass the classic forwarding path.
-Flowtables reside in the ingress hook that is located before the prerouting
-hook. You can select which flows you want to offload through the flow
+Flowtables reside in the ingress *hook* that is located before the prerouting
+*hook*. You can select which flows you want to offload through the flow
 expression from the forward chain. Flowtables are identified by their address
 family and their name. The address family must be one of ip, ip6, or inet. The inet
 address family is a dummy family which is used to create hybrid IPv4/IPv6
@@ -755,17 +766,6 @@ and subtraction can be used to set relative priority, e.g. filter + 5 equals to
 *destroy*:: Delete the specified flowtable, it does not fail if it does not exist.
 *list*:: List all flowtables.
 
-LISTING
--------
-[verse]
-*list { secmarks | synproxys | flow tables | meters | hooks }* ['family']
-*list { secmarks | synproxys | flow tables | meters | hooks } table* ['family'] 'table'
-*list ct { timeout | expectation | helper | helpers } table* ['family'] 'table'
-
-Inspect configured objects.
-*list hooks* shows the full hook pipeline, including those registered by
-kernel modules, such as nf_conntrack.
-
 STATEFUL OBJECTS
 ----------------
 [verse]
@@ -778,13 +778,8 @@ STATEFUL OBJECTS
 *destroy* 'counter' ['family'] 'table' *handle* 'handle'
 *destroy* 'quota' ['family'] 'table' *handle* 'handle'
 *destroy* 'limit' ['family'] 'table' *handle* 'handle'
-*list counters* ['family']
-*list quotas* ['family']
-*list limits* ['family']
-*reset counters* ['family']
-*reset quotas* ['family']
-*reset counters* ['family'] 'table'
-*reset quotas* ['family'] 'table'
+*list* { *counters* | *limits* | *quotas* } ['family'] ['table']
+*reset* { *counters* | *quotas* } ['family'] ['table']
 
 Stateful objects are attached to tables and are identified by a unique name.
 They group stateful information from rules, to reference them in rules the
@@ -897,57 +892,7 @@ ADDITIONAL COMMANDS
 -------------------
 These are some additional commands included in nft.
 
-MONITOR
-~~~~~~~~
-The monitor command allows you to listen to Netlink events produced by the
-nf_tables subsystem. These are either related to creation and deletion of
-objects or to packets for which *meta nftrace* was enabled. When they
-occur, nft will print to stdout the monitored events in either JSON or
-native nft format. +
-
-[verse]
-____
-*monitor* [*new* | *destroy*] 'MONITOR_OBJECT'
-*monitor* *trace*
-
-'MONITOR_OBJECT' := *tables* | *chains* | *sets* | *rules* | *elements* | *ruleset*
-____
-
-To filter events related to a concrete object, use one of the keywords in
-'MONITOR_OBJECT'.
-
-To filter events related to a concrete action, use keyword *new* or *destroy*.
-
-The second form of invocation takes no further options and exclusively prints
-events generated for packets with *nftrace* enabled.
-
-Hit ^C to finish the monitor operation.
-
-.Listen to all events, report in native nft format
---------------------------------------------------
-% nft monitor
---------------------------------------------------
-
-.Listen to deleted rules, report in JSON format
------------------------------------------------
-% nft -j monitor destroy rules
------------------------------------------------
-
-.Listen to both new and destroyed chains, in native nft format
------------------------------------------------------------------
-% nft monitor chains
--------------------------------
-
-.Listen to ruleset events such as table, chain, rule, set, counters and quotas, in native nft format
-----------------------------------------------------------------------------------------------------
-% nft monitor ruleset
----------------------
-
-.Trace incoming packets from host 10.0.0.1
-------------------------------------------
-% nft add rule filter input ip saddr 10.0.0.1 meta nftrace set 1
-% nft monitor trace
-------------------------------------------
+include::additional-commands.txt[]
 
 ERROR REPORTING
 ---------------

@@ -40,6 +40,7 @@ EXPECTED="table inet t {
 	chain c {
 		iifname @s accept
 		oifname @s accept
+		fib saddr oifname @s accept
 		tcp dport . meta iifname @sc accept
 		meta iifname . meta mark @nv accept
 	}

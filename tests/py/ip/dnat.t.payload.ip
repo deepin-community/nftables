@@ -5,8 +5,7 @@ ip test-ip4 prerouting
   [ meta load l4proto => reg 1 ]
   [ cmp eq reg 1 0x00000006 ]
   [ payload load 2b @ transport header + 2 => reg 1 ]
-  [ cmp gte reg 1 0x00005000 ]
-  [ cmp lte reg 1 0x00005a00 ]
+  [ range eq reg 1 0x00005000 0x00005a00 ]
   [ immediate reg 1 0x0203a8c0 ]
   [ nat dnat ip addr_min reg 1 ]
 

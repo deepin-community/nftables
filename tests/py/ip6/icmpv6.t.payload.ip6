@@ -206,8 +206,7 @@ ip6 test-ip6 input
   [ meta load l4proto => reg 1 ]
   [ cmp eq reg 1 0x0000003a ]
   [ payload load 1b @ transport header + 1 => reg 1 ]
-  [ cmp gte reg 1 0x00000003 ]
-  [ cmp lte reg 1 0x00000042 ]
+  [ range eq reg 1 0x00000003 0x00000042 ]
 
 # icmpv6 code {5, 6, 7} accept
 __set%d test-ip6 3
@@ -252,8 +251,7 @@ ip6 test-ip6 input
   [ meta load l4proto => reg 1 ]
   [ cmp eq reg 1 0x0000003a ]
   [ payload load 2b @ transport header + 2 => reg 1 ]
-  [ cmp gte reg 1 0x0000de00 ]
-  [ cmp lte reg 1 0x0000e200 ]
+  [ range eq reg 1 0x0000de00 0x0000e200 ]
 
 # icmpv6 checksum != 222-226
 ip6
@@ -307,8 +305,7 @@ ip6 test-ip6 input
   [ payload load 1b @ transport header + 0 => reg 1 ]
   [ cmp eq reg 1 0x00000002 ]
   [ payload load 4b @ transport header + 4 => reg 1 ]
-  [ cmp gte reg 1 0x21000000 ]
-  [ cmp lte reg 1 0x2d000000 ]
+  [ range eq reg 1 0x21000000 0x2d000000 ]
 
 # icmpv6 mtu != 33-45
 ip6 test-ip6 input
@@ -362,8 +359,7 @@ ip6 test-ip6 input
   [ payload load 1b @ transport header + 0 => reg 1 ]
   [ lookup reg 1 set __set%d ]
   [ payload load 2b @ transport header + 4 => reg 1 ]
-  [ cmp gte reg 1 0x00002100 ]
-  [ cmp lte reg 1 0x00002d00 ]
+  [ range eq reg 1 0x00002100 0x00002d00 ]
 
 # icmpv6 id != 33-45
 __set%d test-ip6 3
@@ -496,8 +492,7 @@ ip6 test-ip6 input
   [ payload load 1b @ transport header + 0 => reg 1 ]
   [ lookup reg 1 set __set%d ]
   [ payload load 2b @ transport header + 6 => reg 1 ]
-  [ cmp gte reg 1 0x00000200 ]
-  [ cmp lte reg 1 0x00000400 ]
+  [ range eq reg 1 0x00000200 0x00000400 ]
 
 # icmpv6 sequence != 2-4
 __set%d test-ip6 3
@@ -518,8 +513,7 @@ ip6 test-ip6 input
   [ payload load 1b @ transport header + 0 => reg 1 ]
   [ cmp eq reg 1 0x00000082 ]
   [ payload load 2b @ transport header + 4 => reg 1 ]
-  [ cmp gte reg 1 0x00002100 ]
-  [ cmp lte reg 1 0x00002d00 ]
+  [ range eq reg 1 0x00002100 0x00002d00 ]
 
 # icmpv6 max-delay != 33-45
 ip6 test-ip6 input
@@ -554,7 +548,7 @@ ip6 test-ip6 input
   [ payload load 2b @ transport header + 4 => reg 1 ]
   [ lookup reg 1 set __set%d 0x1 ]
 
-# icmpv6 type parameter-problem icmpv6 code no-route
+# icmpv6 type parameter-problem icmpv6 code 0
 ip6 
   [ meta load l4proto => reg 1 ]
   [ cmp eq reg 1 0x0000003a ]

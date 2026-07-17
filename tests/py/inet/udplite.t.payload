@@ -19,8 +19,7 @@ inet test-inet input
   [ meta load l4proto => reg 1 ]
   [ cmp eq reg 1 0x00000088 ]
   [ payload load 2b @ transport header + 0 => reg 1 ]
-  [ cmp gte reg 1 0x00003200 ]
-  [ cmp lte reg 1 0x00004600 ]
+  [ range eq reg 1 0x00003200 0x00004600 ]
   [ immediate reg 0 accept ]
 
 # udplite sport != 50-60 accept
@@ -74,8 +73,7 @@ inet test-inet input
   [ meta load l4proto => reg 1 ]
   [ cmp eq reg 1 0x00000088 ]
   [ payload load 2b @ transport header + 2 => reg 1 ]
-  [ cmp gte reg 1 0x00004600 ]
-  [ cmp lte reg 1 0x00004b00 ]
+  [ range eq reg 1 0x00004600 0x00004b00 ]
   [ immediate reg 0 accept ]
 
 # udplite dport != 50-60 accept
@@ -146,8 +144,7 @@ inet test-inet input
   [ meta load l4proto => reg 1 ]
   [ cmp eq reg 1 0x00000088 ]
   [ payload load 2b @ transport header + 6 => reg 1 ]
-  [ cmp gte reg 1 0x00002100 ]
-  [ cmp lte reg 1 0x00002d00 ]
+  [ range eq reg 1 0x00002100 0x00002d00 ]
 
 # udplite checksum != 33-45
 inet test-inet input

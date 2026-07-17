@@ -62,50 +62,39 @@ static struct error_record *tchandle_type_parse(struct parse_ctx *ctx,
 						struct expr **res)
 {
 	uint32_t handle;
-	char *str = NULL;
 
 	if (strcmp(sym->identifier, "root") == 0)
 		handle = TC_H_ROOT;
 	else if (strcmp(sym->identifier, "none") == 0)
 		handle = TC_H_UNSPEC;
 	else if (strchr(sym->identifier, ':')) {
+		char *colon, *end;
 		uint32_t tmp;
-		char *colon;
-
-		str = xstrdup(sym->identifier);
-
-		colon = strchr(str, ':');
-		if (!colon)
-			goto err;
-
-		*colon = '\0';
 
 		errno = 0;
-		tmp = strtoull(str, NULL, 16);
-		if (errno != 0)
+		tmp = strtoul(sym->identifier, &colon, 16);
+		if (errno != 0 || sym->identifier == colon)
 			goto err;
 
-		handle = (tmp << 16);
-		if (str[strlen(str) - 1] == ':')
-			goto out;
+		if (*colon != ':')
+			goto err;
 
+		handle = tmp << 16;
 		errno = 0;
-		tmp = strtoull(colon + 1, NULL, 16);
-		if (errno != 0)
+		tmp = strtoul(colon + 1, &end, 16);
+		if (errno != 0 || *end)
 			goto err;
 
 		handle |= tmp;
 	} else {
 		handle = strtoull(sym->identifier, NULL, 0);
 	}
-out:
-	xfree(str);
+
 	*res = constant_expr_alloc(&sym->location, sym->dtype,
 				   BYTEORDER_HOST_ENDIAN,
 				   sizeof(handle) * BITS_PER_BYTE, &handle);
 	return NULL;
 err:
-	xfree(str);
 	return error(&sym->location, "Could not parse %s", sym->dtype->desc);
 }
 
@@ -336,7 +325,7 @@ const struct datatype pkttype_type = {
 
 void devgroup_table_init(struct nft_ctx *ctx)
 {
-	ctx->output.tbl.devgroup = rt_symbol_table_init("/etc/iproute2/group");
+	ctx->output.tbl.devgroup = rt_symbol_table_init("group");
 }
 
 void devgroup_table_exit(struct nft_ctx *ctx)
@@ -357,17 +346,23 @@ static struct error_record *devgroup_type_parse(struct parse_ctx *ctx,
 	return symbolic_constant_parse(ctx, sym, ctx->tbl->devgroup, res);
 }
 
+static void devgroup_type_describe(struct output_ctx *octx)
+{
+	rt_symbol_table_describe(octx, "group",
+				 octx->tbl.devgroup, &devgroup_type);
+}
+
 const struct datatype devgroup_type = {
 	.type		= TYPE_DEVGROUP,
 	.name		= "devgroup",
 	.desc		= "devgroup name",
+	.describe	= devgroup_type_describe,
 	.byteorder	= BYTEORDER_HOST_ENDIAN,
 	.size		= 4 * BITS_PER_BYTE,
 	.basetype	= &integer_type,
 	.print		= devgroup_type_print,
 	.json		= devgroup_type_json,
 	.parse		= devgroup_type_parse,
-	.flags		= DTYPE_F_PREFIX,
 };
 
 const struct datatype ifname_type = {
@@ -495,9 +490,16 @@ static void hour_type_print(const struct expr *expr, struct output_ctx *octx)
 
 	/* Obtain current tm, so that we can add tm_gmtoff */
 	ts = time(NULL);
-	if (ts != ((time_t) -1) && localtime_r(&ts, &cur_tm))
-		seconds = (seconds + cur_tm.tm_gmtoff) % SECONDS_PER_DAY;
+	if (ts != ((time_t) -1) && localtime_r(&ts, &cur_tm)) {
+		int32_t adj = seconds + cur_tm.tm_gmtoff;
 
+		if (adj < 0)
+			adj += SECONDS_PER_DAY;
+		else if (adj >= SECONDS_PER_DAY)
+			adj -= SECONDS_PER_DAY;
+
+		seconds = adj;
+	}
 	minutes = seconds / 60;
 	seconds %= 60;
 	hours = minutes / 60;
@@ -950,7 +952,7 @@ static void meta_stmt_destroy(struct stmt *stmt)
 	expr_free(stmt->meta.expr);
 }
 
-static const struct stmt_ops meta_stmt_ops = {
+const struct stmt_ops meta_stmt_ops = {
 	.type		= STMT_META,
 	.name		= "meta",
 	.print		= meta_stmt_print,

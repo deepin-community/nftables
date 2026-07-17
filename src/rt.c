@@ -25,7 +25,7 @@
 
 void realm_table_rt_init(struct nft_ctx *ctx)
 {
-	ctx->output.tbl.realm = rt_symbol_table_init("/etc/iproute2/rt_realms");
+	ctx->output.tbl.realm = rt_symbol_table_init("rt_realms");
 }
 
 void realm_table_rt_exit(struct nft_ctx *ctx)
@@ -45,16 +45,22 @@ static struct error_record *realm_type_parse(struct parse_ctx *ctx,
 	return symbolic_constant_parse(ctx, sym, ctx->tbl->realm, res);
 }
 
+static void realm_type_describe(struct output_ctx *octx)
+{
+	rt_symbol_table_describe(octx, "rt_realms",
+				 octx->tbl.realm, &realm_type);
+}
+
 const struct datatype realm_type = {
 	.type		= TYPE_REALM,
 	.name		= "realm",
 	.desc		= "routing realm",
+	.describe	= realm_type_describe,
 	.byteorder	= BYTEORDER_HOST_ENDIAN,
 	.size		= 4 * BITS_PER_BYTE,
 	.basetype	= &integer_type,
 	.print		= realm_type_print,
 	.parse		= realm_type_parse,
-	.flags		= DTYPE_F_PREFIX,
 };
 
 const struct rt_template rt_templates[] = {

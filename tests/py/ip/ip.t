@@ -133,3 +133,22 @@ ip saddr . ip daddr vmap { 192.168.5.1-192.168.5.128 . 192.168.6.1-192.168.6.128
 
 ip saddr 1.2.3.4 ip daddr 3.4.5.6;ok
 ip saddr 1.2.3.4 counter ip daddr 3.4.5.6;ok
+
+ip dscp 1/6;ok;ip dscp & 0x3f == lephb
+
+ip ecn set ip ecn | ect0;ok
+ip ecn set ip ecn | ect1;ok
+ip ecn set ip ecn & ect0;ok
+ip ecn set ip ecn & ect1;ok
+tcp flags set tcp flags & (fin | syn | rst | psh | ack | urg);ok
+tcp flags set tcp flags | ecn | cwr;ok
+ip dscp set ip dscp | lephb;ok
+ip dscp set ip dscp & lephb;ok
+ip dscp set ip dscp & 0x1f;ok
+ip dscp set ip dscp & 0x4f;fail
+ip version set ip version | 1;ok
+ip version set ip version & 1;ok
+ip version set ip version | 0x1f;fail
+ip hdrlength set ip hdrlength | 1;ok
+ip hdrlength set ip hdrlength & 1;ok
+ip hdrlength set ip hdrlength | 0x1f;fail

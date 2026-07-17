@@ -368,9 +368,9 @@ def set_add(s, test_result, filename, lineno):
             flags = "flags %s; " % flags
 
         if s.data == "":
-                cmd = "add set %s %s { type %s;%s %s}" % (table, s.name, s.type, s.timeout, flags)
+                cmd = "add set %s %s { %s;%s %s}" % (table, s.name, s.type, s.timeout, flags)
         else:
-                cmd = "add map %s %s { type %s : %s;%s %s}" % (table, s.name, s.type, s.data, s.timeout, flags)
+                cmd = "add map %s %s { %s : %s;%s %s}" % (table, s.name, s.type, s.data, s.timeout, flags)
 
         ret = execute_cmd(cmd, filename, lineno)
 
@@ -410,7 +410,7 @@ def map_add(s, test_result, filename, lineno):
         if flags != "":
             flags = "flags %s; " % flags
 
-        cmd = "add map %s %s { type %s : %s;%s %s}" % (table, s.name, s.type, s.data, s.timeout, flags)
+        cmd = "add map %s %s { %s : %s;%s %s}" % (table, s.name, s.type, s.data, s.timeout, flags)
 
         ret = execute_cmd(cmd, filename, lineno)
 
@@ -769,10 +769,9 @@ def rule_add(rule, filename, lineno, force_all_family_option, filename_path):
 
     if rule[1].strip() == "ok":
         payload_expected = None
-        payload_path = None
+        payload_path = "%s.payload" % filename_path
         try:
-            payload_log = open("%s.payload" % filename_path)
-            payload_path = payload_log.name
+            payload_log = open(payload_path)
             payload_expected = payload_find_expected(payload_log, rule[0])
         except:
             payload_log = None
@@ -809,6 +808,8 @@ def rule_add(rule, filename, lineno, force_all_family_option, filename_path):
                     reason = "Invalid JSON syntax in expected output: %s" % json_expected
                     print_error(reason)
                     return [-1, warning, error, unit_tests]
+                if json_expected == json_input:
+                    print_warning("Recorded JSON output matches input for: %s" % rule[0])
 
     for table in table_list:
         if rule[1].strip() == "ok":
@@ -1144,11 +1145,16 @@ def set_process(set_line, filename, lineno):
 
     tokens = set_line[0].split(" ")
     set_name = tokens[0]
-    set_type = tokens[2]
+    parse_typeof = tokens[1] == "typeof"
+    set_type = tokens[1] + " " + tokens[2]
     set_data = ""
     set_flags = ""
 
     i = 3
+    if parse_typeof and tokens[i] == "id":
+        set_type += " " + tokens[i]
+        i += 1;
+
     while len(tokens) > i and tokens[i] == ".":
         set_type += " . " + tokens[i+1]
         i += 2
@@ -1156,6 +1162,14 @@ def set_process(set_line, filename, lineno):
     while len(tokens) > i and tokens[i] == ":":
         set_data = tokens[i+1]
         i += 2
+
+    while len(tokens) > i and tokens[i] == ".":
+        set_data += " . " + tokens[i+1]
+        i += 2
+
+    if parse_typeof and tokens[i] == "mark":
+        set_data += " " + tokens[i]
+        i += 1;
 
     if len(tokens) == i+2 and tokens[i] == "timeout":
         timeout = "timeout " + tokens[i+1] + ";"

@@ -479,3 +479,35 @@
         }
     }
 ]
+
+# ct mark set ct mark | ip dscp | 0x200 counter
+[
+    {
+        "mangle": {
+            "key": {
+                "ct": {
+                    "key": "mark"
+                }
+            },
+            "value": {
+                "|": [
+                  {
+                    "ct": {
+                      "key": "mark"
+                    }
+                  },
+                  {
+                    "payload": {
+                      "protocol": "ip",
+                      "field": "dscp"
+                    }
+                  },
+                  512
+                ]
+            }
+        }
+    },
+    {
+        "counter": null
+    }
+]

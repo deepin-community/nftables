@@ -3,8 +3,7 @@ inet test-inet input
   [ meta load l4proto => reg 1 ]
   [ cmp eq reg 1 0x00000021 ]
   [ payload load 2b @ transport header + 0 => reg 1 ]
-  [ cmp gte reg 1 0x00001500 ]
-  [ cmp lte reg 1 0x00002300 ]
+  [ range eq reg 1 0x00001500 0x00002300 ]
 
 # dccp sport != 21-35
 inet test-inet input
@@ -38,8 +37,7 @@ inet test-inet input
   [ meta load l4proto => reg 1 ]
   [ cmp eq reg 1 0x00000021 ]
   [ payload load 2b @ transport header + 0 => reg 1 ]
-  [ cmp gte reg 1 0x00001400 ]
-  [ cmp lte reg 1 0x00003200 ]
+  [ range eq reg 1 0x00001400 0x00003200 ]
 
 # dccp dport {23, 24, 25}
 __set%d test-ip4 3

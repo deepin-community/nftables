@@ -41,6 +41,42 @@ ip6 test-ip6 input
   [ lookup reg 1 set __map%d dreg 0 ]
   [ counter pkts 0 bytes 0 ]
 
+# meta mark set ip6 dscp map @map1
+ip6 test-ip6 input
+  [ payload load 2b @ network header + 0 => reg 1 ]
+  [ bitwise reg 1 = ( reg 1 & 0x0000c00f ) ^ 0x00000000 ]
+  [ byteorder reg 1 = ntoh(reg 1, 2, 2) ]
+  [ bitwise reg 1 = ( reg 1 >> 0x00000006 ) ]
+  [ lookup reg 1 set map1 dreg 1 ]
+  [ meta set mark with reg 1 ]
+
+# meta mark set ip6 dscp . ip6 daddr map @map2
+ip6 test-ip6 input
+  [ payload load 2b @ network header + 0 => reg 1 ]
+  [ bitwise reg 1 = ( reg 1 & 0x0000c00f ) ^ 0x00000000 ]
+  [ byteorder reg 1 = ntoh(reg 1, 2, 2) ]
+  [ bitwise reg 1 = ( reg 1 >> 0x00000006 ) ]
+  [ payload load 16b @ network header + 24 => reg 9 ]
+  [ lookup reg 1 set map2 dreg 1 ]
+  [ meta set mark with reg 1 ]
+
+# ip6 dscp @map3
+ip6 test-ip6 input
+  [ payload load 2b @ network header + 0 => reg 1 ]
+  [ bitwise reg 1 = ( reg 1 & 0x0000c00f ) ^ 0x00000000 ]
+  [ byteorder reg 1 = ntoh(reg 1, 2, 2) ]
+  [ bitwise reg 1 = ( reg 1 >> 0x00000006 ) ]
+  [ lookup reg 1 set map3 ]
+
+# ip6 dscp . ip6 daddr @map4
+ip6 test-ip6 input
+  [ payload load 2b @ network header + 0 => reg 1 ]
+  [ bitwise reg 1 = ( reg 1 & 0x0000c00f ) ^ 0x00000000 ]
+  [ byteorder reg 1 = ntoh(reg 1, 2, 2) ]
+  [ bitwise reg 1 = ( reg 1 >> 0x00000006 ) ]
+  [ payload load 16b @ network header + 24 => reg 9 ]
+  [ lookup reg 1 set map4 ]
+
 # ip6 flowlabel 22
 ip6 test-ip6 input
   [ payload load 3b @ network header + 1 => reg 1 ]
@@ -93,8 +129,7 @@ ip6 test-ip6 input
 # ip6 length 33-45
 ip6 test-ip6 input
   [ payload load 2b @ network header + 4 => reg 1 ]
-  [ cmp gte reg 1 0x00002100 ]
-  [ cmp lte reg 1 0x00002d00 ]
+  [ range eq reg 1 0x00002100 0x00002d00 ]
 
 # ip6 length != 33-45
 ip6 test-ip6 input
@@ -154,8 +189,7 @@ ip6 test-ip6 input
 # ip6 nexthdr 33-44
 ip6 test-ip6 input
   [ payload load 1b @ network header + 6 => reg 1 ]
-  [ cmp gte reg 1 0x00000021 ]
-  [ cmp lte reg 1 0x0000002c ]
+  [ range eq reg 1 0x00000021 0x0000002c ]
 
 # ip6 nexthdr != 33-44
 ip6 test-ip6 input
@@ -175,8 +209,7 @@ ip6 test-ip6 input
 # ip6 hoplimit 33-45
 ip6 test-ip6 input
   [ payload load 1b @ network header + 7 => reg 1 ]
-  [ cmp gte reg 1 0x00000021 ]
-  [ cmp lte reg 1 0x0000002d ]
+  [ range eq reg 1 0x00000021 0x0000002d ]
 
 # ip6 hoplimit != 33-45
 ip6 test-ip6 input

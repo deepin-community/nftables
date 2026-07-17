@@ -325,6 +325,7 @@ static bool nft_options_check(int argc, char * const argv[])
 {
 	bool skip = false, nonoption = false;
 	int pos = 0, i;
+	size_t j;
 
 	for (i = 1; i < argc; i++) {
 		pos += strlen(argv[i - 1]) + 1;
@@ -333,23 +334,22 @@ static bool nft_options_check(int argc, char * const argv[])
 		} else if (skip) {
 			skip = false;
 			continue;
-		} else if (argv[i][0] == '-') {
-			if (nonoption) {
-				nft_options_error(argc, argv, pos);
-				return false;
-			} else if (argv[i][1] == 'd' ||
-				   argv[i][1] == 'I' ||
-				   argv[i][1] == 'f' ||
-				   argv[i][1] == 'D' ||
-				   !strcmp(argv[i], "--debug") ||
-				   !strcmp(argv[i], "--includepath") ||
-				   !strcmp(argv[i], "--define") ||
-				   !strcmp(argv[i], "--file")) {
-				skip = true;
-				continue;
-			}
 		} else if (argv[i][0] != '-') {
 			nonoption = true;
+			continue;
+		}
+		if (nonoption) {
+			nft_options_error(argc, argv, pos);
+			return false;
+		}
+		for (j = 0; j < NR_NFT_OPTIONS; j++) {
+			if (nft_options[j].arg &&
+			    (argv[i][1] == (char)nft_options[j].val ||
+			     (argv[i][1] == '-' &&
+			      !strcmp(argv[i] + 2, nft_options[j].name)))) {
+				skip = true;
+				break;
+			}
 		}
 	}
 
@@ -395,7 +395,7 @@ int main(int argc, char * const *argv)
 		case OPT_DEFINE:
 			if (nft_ctx_add_var(nft, optarg)) {
 				fprintf(stderr,
-					"Failed to define variable '%s'\n",
+					"Error: Failed to define variable '%s'\n",
 					optarg);
 				goto out_fail;
 			}
@@ -423,9 +423,8 @@ int main(int argc, char * const *argv)
 		case OPT_INCLUDEPATH:
 			if (nft_ctx_add_include_path(nft, optarg)) {
 				fprintf(stderr,
-					"Failed to add include path '%s'\n",
+					"Warning: Cannot include path '%s'\n",
 					optarg);
-				goto out_fail;
 			}
 			break;
 		case OPT_NUMERIC:
@@ -458,7 +457,7 @@ int main(int argc, char * const *argv)
 				}
 
 				if (i == array_size(debug_param)) {
-					fprintf(stderr, "invalid debug parameter `%s'\n",
+					fprintf(stderr, "Error: invalid debug parameter `%s'\n",
 						optarg);
 					goto out_fail;
 				}
@@ -479,7 +478,7 @@ int main(int argc, char * const *argv)
 #ifdef HAVE_LIBJANSSON
 			output_flags |= NFT_CTX_OUTPUT_JSON;
 #else
-			fprintf(stderr, "JSON support not compiled-in\n");
+			fprintf(stderr, "Error: JSON support not compiled-in\n");
 			goto out_fail;
 #endif
 			break;

@@ -66,3 +66,5 @@ ip saddr @set6 drop;ok
 ip saddr vmap { 1.1.1.1 : drop, * : accept };ok
 meta mark set ip saddr map { 1.1.1.1 : 0x00000001, * : 0x00000002 };ok
 
+!map2 type ipv4_addr . ipv4_addr . inet_service : ipv4_addr . inet_service;ok
+add @map2 { ip saddr . ip daddr . th dport : 10.0.0.1 . 80 };ok

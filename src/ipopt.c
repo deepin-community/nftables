@@ -24,7 +24,7 @@ static const struct exthdr_desc ipopt_lsrr = {
 		[IPOPT_FIELD_TYPE]		= PHT("type",    0,  8),
 		[IPOPT_FIELD_LENGTH]		= PHT("length",  8,  8),
 		[IPOPT_FIELD_PTR]		= PHT("ptr",    16,  8),
-		[IPOPT_FIELD_ADDR_0]		= PHT("addr",   24, 32),
+		[IPOPT_FIELD_ADDR_0]		= PROTO_HDR_TEMPLATE("addr", &ipaddr_type, BYTEORDER_BIG_ENDIAN, 24, 32),
 	},
 };
 
@@ -35,7 +35,7 @@ static const struct exthdr_desc ipopt_rr = {
 		[IPOPT_FIELD_TYPE]		= PHT("type",   0,   8),
 		[IPOPT_FIELD_LENGTH]		= PHT("length",  8,  8),
 		[IPOPT_FIELD_PTR]		= PHT("ptr",    16,  8),
-		[IPOPT_FIELD_ADDR_0]		= PHT("addr",   24, 32),
+		[IPOPT_FIELD_ADDR_0]		= PROTO_HDR_TEMPLATE("addr", &ipaddr_type, BYTEORDER_BIG_ENDIAN, 24, 32),
 	},
 };
 
@@ -46,7 +46,7 @@ static const struct exthdr_desc ipopt_ssrr = {
 		[IPOPT_FIELD_TYPE]		= PHT("type",   0,   8),
 		[IPOPT_FIELD_LENGTH]		= PHT("length",  8,  8),
 		[IPOPT_FIELD_PTR]		= PHT("ptr",    16,  8),
-		[IPOPT_FIELD_ADDR_0]		= PHT("addr",   24, 32),
+		[IPOPT_FIELD_ADDR_0]		= PROTO_HDR_TEMPLATE("addr", &ipaddr_type, BYTEORDER_BIG_ENDIAN, 24, 32),
 	},
 };
 

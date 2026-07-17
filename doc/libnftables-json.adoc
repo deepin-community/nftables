@@ -202,11 +202,18 @@ Rename a chain. The new name is expected in a dedicated property named
 
 === TABLE
 [verse]
+____
 *{ "table": {
 	"family":* 'STRING'*,
 	"name":* 'STRING'*,
-	"handle":* 'NUMBER'
+	"handle":* 'NUMBER'*,
+	"flags":* 'TABLE_FLAGS'
 *}}*
+
+'TABLE_FLAGS' := 'TABLE_FLAG' | *[* 'TABLE_FLAG_LIST' *]*
+'TABLE_FLAG_LIST' := 'TABLE_FLAG' [*,* 'TABLE_FLAG_LIST' ]
+'TABLE_FLAG' := *"dormant"* | *"owner"* | *"persist"*
+____
 
 This object describes a table.
 
@@ -217,6 +224,8 @@ This object describes a table.
 *handle*::
 	The table's handle. In input, it is used only in *delete* command as
 	alternative to *name*.
+*flags*::
+	The table's flags.
 
 === CHAIN
 [verse]
@@ -312,7 +321,8 @@ ____
 	"elem":* 'SET_ELEMENTS'*,
 	"timeout":* 'NUMBER'*,
 	"gc-interval":* 'NUMBER'*,
-	"size":* 'NUMBER'
+	"size":* 'NUMBER'*,
+	"auto-merge":* 'BOOLEAN'
 *}}*
 
 *{ "map": {
@@ -327,10 +337,11 @@ ____
 	"elem":* 'SET_ELEMENTS'*,
 	"timeout":* 'NUMBER'*,
 	"gc-interval":* 'NUMBER'*,
-	"size":* 'NUMBER'
+	"size":* 'NUMBER'*,
+	"auto-merge":* 'BOOLEAN'
 *}}*
 
-'SET_TYPE' := 'STRING' | *[* 'SET_TYPE_LIST' *]*
+'SET_TYPE' := 'STRING' | *[* 'SET_TYPE_LIST' *]* | *{ "typeof":* 'EXPRESSION' *}*
 'SET_TYPE_LIST' := 'STRING' [*,* 'SET_TYPE_LIST' ]
 'SET_POLICY' := *"performance"* | *"memory"*
 'SET_FLAG_LIST' := 'SET_FLAG' [*,* 'SET_FLAG_LIST' ]
@@ -366,10 +377,13 @@ that they translate a unique key to a value.
 	Garbage collector interval in seconds.
 *size*::
 	Maximum number of elements supported.
+*auto-merge*::
+	Automatic merging of adjacent/overlapping set elements in interval sets.
 
 ==== TYPE
-The set type might be a string, such as *"ipv4_addr"* or an array
-consisting of strings (for concatenated types).
+The set type might be a string, such as *"ipv4_addr"*, an array
+consisting of strings (for concatenated types) or a *typeof* object containing
+an expression to extract the type from.
 
 ==== ELEM
 A single set element might be given as string, integer or boolean value for
@@ -682,11 +696,6 @@ processing continues with the next rule in the same chain.
 ==== OPERATORS
 
 [horizontal]
-*&*:: Binary AND
-*|*:: Binary OR
-*^*:: Binary XOR
-*<<*:: Left shift
-*>>*:: Right shift
 *==*:: Equal
 *!=*:: Not equal
 *<*:: Less than
@@ -1174,7 +1183,7 @@ ____
 
 Construct a payload expression, i.e. a reference to a certain part of packet
 data. The first form creates a raw payload expression to point at a random
-number (*len*) of bytes at a certain offset (*offset*) from a given reference
+number (*len*) of bits at a certain offset (*offset*) from a given reference
 point (*base*). The following *base* values are accepted:
 
 *"ll"*::
@@ -1344,15 +1353,17 @@ Perform kernel Forwarding Information Base lookups.
 
 === BINARY OPERATION
 [verse]
-*{ "|": [* 'EXPRESSION'*,* 'EXPRESSION' *] }*
-*{ "^": [* 'EXPRESSION'*,* 'EXPRESSION' *] }*
-*{ "&": [* 'EXPRESSION'*,* 'EXPRESSION' *] }*
-*{ "+<<+": [* 'EXPRESSION'*,* 'EXPRESSION' *] }*
-*{ ">>": [* 'EXPRESSION'*,* 'EXPRESSION' *] }*
+*{ "|": [* 'EXPRESSION'*,* 'EXPRESSIONS' *] }*
+*{ "^": [* 'EXPRESSION'*,* 'EXPRESSIONS' *] }*
+*{ "&": [* 'EXPRESSION'*,* 'EXPRESSIONS' *] }*
+*{ "+<<+": [* 'EXPRESSION'*,* 'EXPRESSIONS' *] }*
+*{ ">>": [* 'EXPRESSION'*,* 'EXPRESSIONS' *] }*
+'EXPRESSIONS' := 'EXPRESSION' | 'EXPRESSION'*,* 'EXPRESSIONS'
 
-All binary operations expect an array of exactly two expressions, of which the
+All binary operations expect an array of at least two expressions, of which the
 first element denotes the left hand side and the second one the right hand
-side.
+side. Extra elements are accepted in the given array and appended to the term
+accordingly.
 
 === VERDICT
 [verse]

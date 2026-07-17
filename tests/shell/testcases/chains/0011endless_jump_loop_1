@@ -3,7 +3,7 @@
 set -e
 
 $NFT add table t
-$NFT add chain t c1
+$NFT add chain "t c1 { type filter hook forward priority 0; }"
 $NFT add chain t c2
 $NFT add map t m {type inet_service : verdict \;}
 $NFT add element t m {2 : jump c2}

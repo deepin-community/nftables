@@ -455,12 +455,12 @@ static void netlink_parse_lookup(struct netlink_parse_ctx *ctx,
 	ctx->stmt = expr_stmt_alloc(loc, expr);
 }
 
-static struct expr *netlink_parse_bitwise_bool(struct netlink_parse_ctx *ctx,
-					       const struct location *loc,
-					       const struct nftnl_expr *nle,
-					       enum nft_registers sreg,
-					       struct expr *left)
-
+static struct expr *
+netlink_parse_bitwise_mask_xor(struct netlink_parse_ctx *ctx,
+			       const struct location *loc,
+			       const struct nftnl_expr *nle,
+			       enum nft_registers sreg,
+			       struct expr *left)
 {
 	struct nft_data_delinearize nld;
 	struct expr *expr, *mask, *xor, *or;
@@ -520,10 +520,39 @@ static struct expr *netlink_parse_bitwise_bool(struct netlink_parse_ctx *ctx,
 	return expr;
 }
 
+static struct expr *netlink_parse_bitwise_bool(struct netlink_parse_ctx *ctx,
+					       const struct location *loc,
+					       const struct nftnl_expr *nle,
+					       enum nft_bitwise_ops op,
+					       enum nft_registers sreg,
+					       struct expr *left)
+{
+	enum nft_registers sreg2;
+	struct expr *right, *expr;
+
+	sreg2 = netlink_parse_register(nle, NFTNL_EXPR_BITWISE_SREG2);
+	right = netlink_get_register(ctx, loc, sreg2);
+	if (right == NULL) {
+		netlink_error(ctx, loc,
+			      "Bitwise expression has no right-hand expression");
+		return NULL;
+	}
+
+	expr = binop_expr_alloc(loc,
+				op == NFT_BITWISE_XOR ? OP_XOR :
+				op == NFT_BITWISE_AND ? OP_AND : OP_OR,
+				left, right);
+
+	if (left->len > 0)
+		expr->len = left->len;
+
+	return expr;
+}
+
 static struct expr *netlink_parse_bitwise_shift(struct netlink_parse_ctx *ctx,
 						const struct location *loc,
 						const struct nftnl_expr *nle,
-						enum ops op,
+						enum nft_bitwise_ops op,
 						enum nft_registers sreg,
 						struct expr *left)
 {
@@ -534,7 +563,9 @@ static struct expr *netlink_parse_bitwise_shift(struct netlink_parse_ctx *ctx,
 	right = netlink_alloc_value(loc, &nld);
 	right->byteorder = BYTEORDER_HOST_ENDIAN;
 
-	expr = binop_expr_alloc(loc, op, left, right);
+	expr = binop_expr_alloc(loc,
+				op == NFT_BITWISE_LSHIFT ? OP_LSHIFT : OP_RSHIFT,
+				left, right);
 	expr->len = nftnl_expr_get_u32(nle, NFTNL_EXPR_BITWISE_LEN) * BITS_PER_BYTE;
 
 	return expr;
@@ -558,16 +589,19 @@ static void netlink_parse_bitwise(struct netlink_parse_ctx *ctx,
 	op = nftnl_expr_get_u32(nle, NFTNL_EXPR_BITWISE_OP);
 
 	switch (op) {
-	case NFT_BITWISE_BOOL:
-		expr = netlink_parse_bitwise_bool(ctx, loc, nle, sreg,
-						  left);
+	case NFT_BITWISE_MASK_XOR:
+		expr = netlink_parse_bitwise_mask_xor(ctx, loc, nle, sreg,
+						      left);
+		break;
+	case NFT_BITWISE_XOR:
+	case NFT_BITWISE_AND:
+	case NFT_BITWISE_OR:
+		expr = netlink_parse_bitwise_bool(ctx, loc, nle, op,
+						  sreg, left);
 		break;
 	case NFT_BITWISE_LSHIFT:
-		expr = netlink_parse_bitwise_shift(ctx, loc, nle, OP_LSHIFT,
-						   sreg, left);
-		break;
 	case NFT_BITWISE_RSHIFT:
-		expr = netlink_parse_bitwise_shift(ctx, loc, nle, OP_RSHIFT,
+		expr = netlink_parse_bitwise_shift(ctx, loc, nle, op,
 						   sreg, left);
 		break;
 	default:
@@ -1090,11 +1124,7 @@ static void netlink_parse_log(struct netlink_parse_ctx *ctx,
 	stmt = log_stmt_alloc(loc);
 	prefix = nftnl_expr_get_str(nle, NFTNL_EXPR_LOG_PREFIX);
 	if (nftnl_expr_is_set(nle, NFTNL_EXPR_LOG_PREFIX)) {
-		stmt->log.prefix = constant_expr_alloc(&internal_location,
-						       &string_type,
-						       BYTEORDER_HOST_ENDIAN,
-						       (strlen(prefix) + 1) * BITS_PER_BYTE,
-						       prefix);
+		stmt->log.prefix = xstrdup(prefix);
 		stmt->log.flags |= STMT_LOG_PREFIX;
 	}
 	if (nftnl_expr_is_set(nle, NFTNL_EXPR_LOG_GROUP)) {
@@ -2072,6 +2102,7 @@ static void payload_match_expand(struct rule_pp_ctx *ctx,
 		 */
 		payload_dependency_kill(&dl->pdctx, nexpr->left,
 					dl->pctx.family);
+		expr_set_type(tmp, nexpr->left->dtype, nexpr->byteorder);
 		if (expr->op == OP_EQ && left->flags & EXPR_F_PROTOCOL)
 			payload_dependency_store(&dl->pdctx, nstmt, base);
 	}
@@ -2219,17 +2250,71 @@ static bool __meta_dependency_may_kill(const struct expr *dep, uint8_t *nfproto)
 	return false;
 }
 
+static bool ct_may_dependency_kill(unsigned int meta_nfproto,
+				   const struct expr *ct)
+{
+	assert(ct->etype == EXPR_CT);
+
+	switch (ct->ct.key) {
+	case NFT_CT_DST:
+	case NFT_CT_SRC:
+		switch (ct->len) {
+		case 32:
+			return meta_nfproto == NFPROTO_IPV4;
+		case 128:
+			return meta_nfproto == NFPROTO_IPV6;
+		default:
+			break;
+		}
+		return false;
+	case NFT_CT_DST_IP:
+	case NFT_CT_SRC_IP:
+		return meta_nfproto == NFPROTO_IPV4;
+	case NFT_CT_DST_IP6:
+	case NFT_CT_SRC_IP6:
+		return meta_nfproto == NFPROTO_IPV6;
+	default:
+		break;
+	}
+
+	return false;
+}
+
+static bool meta_may_dependency_kill(uint8_t nfproto, const struct expr *meta, const struct expr *v)
+{
+	uint8_t l4proto;
+
+	if (meta->meta.key != NFT_META_L4PROTO)
+		return true;
+
+	if (v->etype != EXPR_VALUE || v->len != 8)
+		return false;
+
+	l4proto = mpz_get_uint8(v->value);
+
+	switch (l4proto) {
+	case IPPROTO_ICMP:
+		return nfproto == NFPROTO_IPV4;
+	case IPPROTO_ICMPV6:
+		return nfproto == NFPROTO_IPV6;
+	default:
+		break;
+	}
+
+	return false;
+}
+
 /* We have seen a protocol key expression that restricts matching at the network
  * base, leave it in place since this is meaningful in bridge, inet and netdev
  * families. Exceptions are ICMP and ICMPv6 where this code assumes that can
  * only happen with IPv4 and IPv6.
  */
-static bool meta_may_dependency_kill(struct payload_dep_ctx *ctx,
+static bool ct_meta_may_dependency_kill(struct payload_dep_ctx *ctx,
 				     unsigned int family,
 				     const struct expr *expr)
 {
-	uint8_t l4proto, nfproto = NFPROTO_UNSPEC;
 	struct expr *dep = payload_dependency_get(ctx, PROTO_BASE_NETWORK_HDR);
+	uint8_t nfproto = NFPROTO_UNSPEC;
 
 	if (!dep)
 		return true;
@@ -2249,22 +2334,14 @@ static bool meta_may_dependency_kill(struct payload_dep_ctx *ctx,
 		return true;
 	}
 
-	if (expr->left->meta.key != NFT_META_L4PROTO)
-		return true;
-
-	l4proto = mpz_get_uint8(expr->right->value);
-
-	switch (l4proto) {
-	case IPPROTO_ICMP:
-	case IPPROTO_ICMPV6:
-		break;
+	switch (expr->left->etype) {
+	case EXPR_META:
+		return meta_may_dependency_kill(nfproto, expr->left, expr->right);
+	case EXPR_CT:
+		return ct_may_dependency_kill(nfproto, expr->left);
 	default:
-		return false;
+		break;
 	}
-
-	if ((nfproto == NFPROTO_IPV4 && l4proto == IPPROTO_ICMPV6) ||
-	    (nfproto == NFPROTO_IPV6 && l4proto == IPPROTO_ICMP))
-		return false;
 
 	return true;
 }
@@ -2291,8 +2368,8 @@ static void ct_meta_common_postprocess(struct rule_pp_ctx *ctx,
 
 		if (base < PROTO_BASE_TRANSPORT_HDR) {
 			if (payload_dependency_exists(&dl->pdctx, base) &&
-			    meta_may_dependency_kill(&dl->pdctx,
-						     dl->pctx.family, expr))
+			    ct_meta_may_dependency_kill(&dl->pdctx,
+							dl->pctx.family, expr))
 				payload_dependency_release(&dl->pdctx, base);
 
 			if (left->flags & EXPR_F_PROTOCOL)
@@ -2421,7 +2498,7 @@ static void binop_adjust(const struct expr *binop, struct expr *right,
 	}
 }
 
-static void __binop_postprocess(struct rule_pp_ctx *ctx,
+static bool __binop_postprocess(struct rule_pp_ctx *ctx,
 				struct expr *expr,
 				struct expr *left,
 				struct expr *mask,
@@ -2471,17 +2548,27 @@ static void __binop_postprocess(struct rule_pp_ctx *ctx,
 			expr_set_type(right, left->dtype, left->byteorder);
 
 		expr_free(binop);
+		return true;
+	} else if (left->etype == EXPR_PAYLOAD &&
+		   expr->right->etype == EXPR_VALUE &&
+		   payload_expr_trim_force(left, mask, &shift)) {
+			mpz_rshift_ui(expr->right->value, shift);
+			*expr_binop = expr_get(left);
+			expr_free(binop);
+			return true;
 	}
+
+	return false;
 }
 
-static void binop_postprocess(struct rule_pp_ctx *ctx, struct expr *expr,
+static bool binop_postprocess(struct rule_pp_ctx *ctx, struct expr *expr,
 			      struct expr **expr_binop)
 {
 	struct expr *binop = *expr_binop;
 	struct expr *left = binop->left;
 	struct expr *mask = binop->right;
 
-	__binop_postprocess(ctx, expr, left, mask, expr_binop);
+	return __binop_postprocess(ctx, expr, left, mask, expr_binop);
 }
 
 static void map_binop_postprocess(struct rule_pp_ctx *ctx, struct expr *expr)
@@ -2517,57 +2604,30 @@ static void relational_binop_postprocess(struct rule_pp_ctx *ctx,
 
 	if (binop->op == OP_AND && (expr->op == OP_NEQ || expr->op == OP_EQ) &&
 	    right->dtype->basetype &&
-	    right->dtype->basetype->type == TYPE_BITMASK) {
-		switch (right->etype) {
-		case EXPR_VALUE:
-			if (!mpz_cmp_ui(right->value, 0)) {
-				/* Flag comparison: data & flags != 0
-				 *
-				 * Split the flags into a list of flag values and convert the
-				 * op to OP_EQ.
-				 */
-				expr_free(right);
+	    right->dtype->basetype->type == TYPE_BITMASK &&
+	    right->etype == EXPR_VALUE &&
+	    !mpz_cmp_ui(right->value, 0)) {
+		/* Flag comparison: data & flags != 0
+		 *
+		 * Split the flags into a list of flag values and convert the
+		 * op to OP_EQ.
+		 */
+		expr_free(right);
 
-				expr->left  = expr_get(binop->left);
-				expr->right = binop_tree_to_list(NULL, binop->right);
-				switch (expr->op) {
-				case OP_NEQ:
-					expr->op = OP_IMPLICIT;
-					break;
-				case OP_EQ:
-					expr->op = OP_NEG;
-					break;
-				default:
-					BUG("unknown operation type %d\n", expr->op);
-				}
-				expr_free(binop);
-			} else if (binop->right->etype == EXPR_VALUE &&
-				   right->etype == EXPR_VALUE &&
-				   !mpz_cmp(right->value, binop->right->value)) {
-				/* Skip flag / flag representation for:
-				 * data & flag == flag
-				 * data & flag != flag
-				 */
-				;
-			} else {
-				*exprp = flagcmp_expr_alloc(&expr->location, expr->op,
-							    expr_get(binop->left),
-							    binop_tree_to_list(NULL, binop->right),
-							    expr_get(right));
-				expr_free(expr);
-			}
+		expr->left  = expr_get(binop->left);
+		expr->right = binop_tree_to_list(NULL, binop->right);
+		switch (expr->op) {
+		case OP_NEQ:
+			expr->op = OP_IMPLICIT;
 			break;
-		case EXPR_BINOP:
-			*exprp = flagcmp_expr_alloc(&expr->location, expr->op,
-						    expr_get(binop->left),
-						    binop_tree_to_list(NULL, binop->right),
-						    binop_tree_to_list(NULL, right));
-			expr_free(expr);
+		case OP_EQ:
+			expr->op = OP_NEG;
 			break;
 		default:
-			break;
+			BUG("unknown operation type %d\n", expr->op);
 		}
-	} else if (binop->left->dtype->flags & DTYPE_F_PREFIX &&
+		expr_free(binop);
+	} else if (datatype_prefix_notation(binop->left->dtype) &&
 		   binop->op == OP_AND && expr->right->etype == EXPR_VALUE &&
 		   expr_mask_is_prefix(binop->right)) {
 		expr->left = expr_get(binop->left);
@@ -2641,8 +2701,16 @@ static bool payload_binop_postprocess(struct rule_pp_ctx *ctx,
 	if (expr->left->etype != EXPR_BINOP || expr->left->op != OP_AND)
 		return false;
 
-	if (expr->left->left->etype != EXPR_PAYLOAD)
+	switch (expr->left->left->etype) {
+	case EXPR_EXTHDR:
+		break;
+	case EXPR_PAYLOAD:
+		break;
+	default:
 		return false;
+	}
+
+	expr_postprocess(ctx, &expr->left->left);
 
 	expr_set_type(expr->right, &integer_type,
 		      BYTEORDER_HOST_ENDIAN);
@@ -2720,6 +2788,51 @@ static struct expr *expr_postprocess_string(struct expr *expr)
 	return out;
 }
 
+static void expr_postprocess_value(struct rule_pp_ctx *ctx, struct expr **exprp)
+{
+	bool interval = (ctx->set && ctx->set->flags & NFT_SET_INTERVAL);
+	struct expr *expr = *exprp;
+
+	// FIXME
+	if (expr->byteorder == BYTEORDER_HOST_ENDIAN && !interval)
+		mpz_switch_byteorder(expr->value, expr->len / BITS_PER_BYTE);
+
+	if (expr_basetype(expr)->type == TYPE_STRING)
+		*exprp = expr_postprocess_string(expr);
+
+	expr = *exprp;
+	if (expr->dtype->basetype != NULL &&
+	    expr->dtype->basetype->type == TYPE_BITMASK)
+		*exprp = bitmask_expr_to_binops(expr);
+}
+
+static void expr_postprocess_concat(struct rule_pp_ctx *ctx, struct expr **exprp)
+{
+	struct expr *i, *n, *expr = *exprp;
+	unsigned int type = expr->dtype->type, ntype = 0;
+	int off = expr->dtype->subtypes;
+	const struct datatype *dtype;
+	LIST_HEAD(tmp);
+
+	assert(expr->etype == EXPR_CONCAT);
+
+	ctx->flags |= RULE_PP_IN_CONCATENATION;
+	list_for_each_entry_safe(i, n, &expr->expressions, list) {
+		if (type) {
+			dtype = concat_subtype_lookup(type, --off);
+			expr_set_type(i, dtype, dtype->byteorder);
+		}
+		list_del(&i->list);
+		expr_postprocess(ctx, &i);
+		list_add_tail(&i->list, &tmp);
+
+		ntype = concat_subtype_add(ntype, i->dtype->type);
+	}
+	ctx->flags &= ~RULE_PP_IN_CONCATENATION;
+	list_splice(&tmp, &expr->expressions);
+	__datatype_set(expr, concat_type_alloc(ntype));
+}
+
 static void expr_postprocess(struct rule_pp_ctx *ctx, struct expr **exprp)
 {
 	struct dl_proto_ctx *dl = dl_proto_ctx(ctx);
@@ -2746,30 +2859,9 @@ static void expr_postprocess(struct rule_pp_ctx *ctx, struct expr **exprp)
 		list_for_each_entry(i, &expr->expressions, list)
 			expr_postprocess(ctx, &i);
 		break;
-	case EXPR_CONCAT: {
-		unsigned int type = expr->dtype->type, ntype = 0;
-		int off = expr->dtype->subtypes;
-		const struct datatype *dtype;
-		LIST_HEAD(tmp);
-		struct expr *n;
-
-		ctx->flags |= RULE_PP_IN_CONCATENATION;
-		list_for_each_entry_safe(i, n, &expr->expressions, list) {
-			if (type) {
-				dtype = concat_subtype_lookup(type, --off);
-				expr_set_type(i, dtype, dtype->byteorder);
-			}
-			list_del(&i->list);
-			expr_postprocess(ctx, &i);
-			list_add_tail(&i->list, &tmp);
-
-			ntype = concat_subtype_add(ntype, i->dtype->type);
-		}
-		ctx->flags &= ~RULE_PP_IN_CONCATENATION;
-		list_splice(&tmp, &expr->expressions);
-		__datatype_set(expr, concat_type_alloc(ntype));
+	case EXPR_CONCAT:
+		expr_postprocess_concat(ctx, exprp);
 		break;
-	}
 	case EXPR_UNARY:
 		expr_postprocess(ctx, &expr->arg);
 		expr_set_type(expr, expr->arg->dtype, !expr->arg->byteorder);
@@ -2846,8 +2938,28 @@ static void expr_postprocess(struct rule_pp_ctx *ctx, struct expr **exprp)
 
 				datatype_set(expr->left, expr->right->dtype);
 			}
+			ctx->set = expr->right->set;
 			expr_postprocess(ctx, &expr->left);
+			ctx->set = NULL;
 			break;
+		case EXPR_UNARY:
+			if (lhs_is_meta_hour(expr->left->arg) &&
+			    expr->right->etype == EXPR_RANGE) {
+				struct expr *range = expr->right;
+
+				/* Cross-day range needs to be reversed.
+				 * Kernel handles time in UTC. Therefore,
+				 * 03:00-14:00 AEDT (Sidney, Australia) time
+				 * is a cross-day range.
+				 */
+				if (mpz_cmp(range->left->value,
+					    range->right->value) <= 0 &&
+				    expr->op == OP_NEQ) {
+					range_expr_swap_values(range);
+					expr->op = OP_IMPLICIT;
+				}
+			}
+			/* fallthrough */
 		default:
 			expr_postprocess(ctx, &expr->left);
 			break;
@@ -2882,18 +2994,7 @@ static void expr_postprocess(struct rule_pp_ctx *ctx, struct expr **exprp)
 		payload_dependency_kill(&dl->pdctx, expr, dl->pctx.family);
 		break;
 	case EXPR_VALUE:
-		// FIXME
-		if (expr->byteorder == BYTEORDER_HOST_ENDIAN)
-			mpz_switch_byteorder(expr->value, expr->len / BITS_PER_BYTE);
-
-		if (expr_basetype(expr)->type == TYPE_STRING)
-			*exprp = expr_postprocess_string(expr);
-
-		expr = *exprp;
-		if (expr->dtype->basetype != NULL &&
-		    expr->dtype->basetype->type == TYPE_BITMASK)
-			*exprp = bitmask_expr_to_binops(expr);
-
+		expr_postprocess_value(ctx, exprp);
 		break;
 	case EXPR_RANGE:
 		expr_postprocess(ctx, &expr->left);
@@ -2942,7 +3043,7 @@ static void stmt_reject_postprocess(struct rule_pp_ctx *rctx)
 	switch (dl->pctx.family) {
 	case NFPROTO_IPV4:
 		stmt->reject.family = dl->pctx.family;
-		datatype_set(stmt->reject.expr, &icmp_code_type);
+		datatype_set(stmt->reject.expr, &reject_icmp_code_type);
 		if (stmt->reject.type == NFT_REJECT_TCP_RST &&
 		    payload_dependency_exists(&dl->pdctx,
 					      PROTO_BASE_TRANSPORT_HDR))
@@ -2951,7 +3052,7 @@ static void stmt_reject_postprocess(struct rule_pp_ctx *rctx)
 		break;
 	case NFPROTO_IPV6:
 		stmt->reject.family = dl->pctx.family;
-		datatype_set(stmt->reject.expr, &icmpv6_code_type);
+		datatype_set(stmt->reject.expr, &reject_icmpv6_code_type);
 		if (stmt->reject.type == NFT_REJECT_TCP_RST &&
 		    payload_dependency_exists(&dl->pdctx,
 					      PROTO_BASE_TRANSPORT_HDR))
@@ -2962,7 +3063,7 @@ static void stmt_reject_postprocess(struct rule_pp_ctx *rctx)
 	case NFPROTO_BRIDGE:
 	case NFPROTO_NETDEV:
 		if (stmt->reject.type == NFT_REJECT_ICMPX_UNREACH) {
-			datatype_set(stmt->reject.expr, &icmpx_code_type);
+			datatype_set(stmt->reject.expr, &reject_icmpx_code_type);
 			break;
 		}
 
@@ -2978,12 +3079,12 @@ static void stmt_reject_postprocess(struct rule_pp_ctx *rctx)
 		case NFPROTO_IPV4:			/* INET */
 		case __constant_htons(ETH_P_IP):	/* BRIDGE, NETDEV */
 			stmt->reject.family = NFPROTO_IPV4;
-			datatype_set(stmt->reject.expr, &icmp_code_type);
+			datatype_set(stmt->reject.expr, &reject_icmp_code_type);
 			break;
 		case NFPROTO_IPV6:			/* INET */
 		case __constant_htons(ETH_P_IPV6):	/* BRIDGE, NETDEV */
 			stmt->reject.family = NFPROTO_IPV6;
-			datatype_set(stmt->reject.expr, &icmpv6_code_type);
+			datatype_set(stmt->reject.expr, &reject_icmpv6_code_type);
 			break;
 		default:
 			break;
@@ -3066,7 +3167,7 @@ static void stmt_expr_postprocess(struct rule_pp_ctx *ctx)
 	expr_postprocess(ctx, &ctx->stmt->expr);
 
 	if (dl->pdctx.prev && ctx->stmt &&
-	    ctx->stmt->ops->type == dl->pdctx.prev->ops->type &&
+	    ctx->stmt->type == dl->pdctx.prev->type &&
 	    expr_may_merge_range(ctx->stmt->expr, dl->pdctx.prev->expr, &op))
 		expr_postprocess_range(ctx, op);
 }
@@ -3129,7 +3230,8 @@ static void stmt_payload_binop_pp(struct rule_pp_ctx *ctx, struct expr *binop)
  * decoding changed '(payload & mask) ^ bits_to_set' into
  * 'payload | bits_to_set', discarding the redundant "& 0xfff...".
  */
-static void stmt_payload_binop_postprocess(struct rule_pp_ctx *ctx)
+static void stmt_payload_binop_postprocess(struct rule_pp_ctx *ctx,
+					   const struct proto_ctx *pctx)
 {
 	struct expr *expr, *binop, *payload, *value, *mask;
 	struct stmt *stmt = ctx->stmt;
@@ -3142,6 +3244,7 @@ static void stmt_payload_binop_postprocess(struct rule_pp_ctx *ctx)
 
 	switch (expr->left->etype) {
 	case EXPR_BINOP: {/* I? */
+		unsigned int shift = 0;
 		mpz_t tmp;
 
 		if (expr->op != OP_OR)
@@ -3175,12 +3278,17 @@ static void stmt_payload_binop_postprocess(struct rule_pp_ctx *ctx)
 		mpz_set(mask->value, bitmask);
 		mpz_clear(bitmask);
 
-		binop_postprocess(ctx, expr, &expr->left);
-		if (!payload_is_known(payload)) {
+		if (!binop_postprocess(ctx, expr, &expr->left) &&
+		    !payload_is_known(payload) &&
+		    !payload_expr_trim_force(payload,
+					     mask, &shift)) {
 			mpz_set(mask->value, tmp);
 			mpz_clear(tmp);
 			return;
 		}
+
+		if (shift)
+			mpz_rshift_ui(value->value, shift);
 
 		mpz_clear(tmp);
 		expr_free(stmt->payload.expr);
@@ -3190,41 +3298,67 @@ static void stmt_payload_binop_postprocess(struct rule_pp_ctx *ctx)
 		break;
 	}
 	case EXPR_PAYLOAD: /* II? */
-		value = expr->right;
-		if (value->etype != EXPR_VALUE)
+		payload = expr->left;
+		mask = expr->right;
+
+		if (mask->etype != EXPR_VALUE)
+			return;
+
+		if (!payload_expr_cmp(stmt->payload.expr, payload))
 			return;
 
 		switch (expr->op) {
-		case OP_AND: /* IIa */
-			payload = expr->left;
+		case OP_AND: { /* IIa */
+			unsigned int shift_unused;
+			mpz_t tmp;
+
+			if (stmt_payload_expr_trim(stmt, pctx))
+				return;
+
+			mpz_init(tmp);
+			mpz_set(tmp, mask->value);
+
 			mpz_init_bitmask(bitmask, payload->len);
-			mpz_xor(bitmask, bitmask, value->value);
-			mpz_set(value->value, bitmask);
+			mpz_xor(bitmask, bitmask, mask->value);
+			mpz_set(mask->value, bitmask);
 			mpz_clear(bitmask);
+
+			stmt_payload_binop_pp(ctx, expr);
+			if (!payload_is_known(expr->left) &&
+			    !payload_expr_trim_force(expr->left, mask, &shift_unused)) {
+				mpz_set(mask->value, tmp);
+				mpz_clear(tmp);
+				return;
+			}
+
+			mpz_clear(tmp);
+
+			/* Mask was used to match payload, i.e. user asked to
+			 * clear the payload expression.
+			 * The "mask" value becomes new stmt->payload.value
+			 * so set this to 0.
+			 * Also the reason why &shift_unused is ignored.
+			 */
+			mpz_set_ui(mask->value, 0);
 			break;
-		case OP_OR: /* IIb */
+		}
+		case OP_OR:  /* IIb */
+			stmt_payload_binop_pp(ctx, expr);
+			if (stmt_payload_expr_trim(stmt, pctx))
+				return;
+			if (!payload_is_known(expr->left))
+				return;
 			break;
-		default: /* No idea */
+		case OP_XOR:
+			if (stmt_payload_expr_trim(stmt, pctx))
+				return;
+
+			return;
+		default: /* No idea what to do */
 			return;
 		}
-
-		stmt_payload_binop_pp(ctx, expr);
-		if (!payload_is_known(expr->left))
-			return;
 
 		expr_free(stmt->payload.expr);
-
-		switch (expr->op) {
-		case OP_AND:
-			/* Mask was used to match payload, i.e.
-			 * user asked to set zero value.
-			 */
-			mpz_set_ui(value->value, 0);
-			break;
-		default:
-			break;
-		}
-
 		stmt->payload.expr = expr_get(expr->left);
 		stmt->payload.val = expr_get(expr->right);
 		expr_free(expr);
@@ -3241,7 +3375,7 @@ static void stmt_payload_postprocess(struct rule_pp_ctx *ctx)
 
 	payload_expr_complete(stmt->payload.expr, &dl->pctx);
 	if (!payload_is_known(stmt->payload.expr))
-		stmt_payload_binop_postprocess(ctx);
+		stmt_payload_binop_postprocess(ctx, &dl->pctx);
 
 	expr_postprocess(ctx, &stmt->payload.expr);
 
@@ -3316,7 +3450,7 @@ static struct dl_proto_ctx *rule_update_dl_proto_ctx(struct rule_pp_ctx *rctx)
 	const struct stmt *stmt = rctx->stmt;
 	bool inner = false;
 
-	switch (stmt->ops->type) {
+	switch (stmt->type) {
 	case STMT_EXPRESSION:
 		if (has_inner_desc(stmt->expr->left))
 			inner = true;
@@ -3350,7 +3484,7 @@ static void rule_parse_postprocess(struct netlink_parse_ctx *ctx, struct rule *r
 	proto_ctx_init(&rctx._dl[1].pctx, NFPROTO_BRIDGE, ctx->debug_mask, true);
 
 	list_for_each_entry_safe(stmt, next, &rule->stmts, list) {
-		enum stmt_types type = stmt->ops->type;
+		enum stmt_types type = stmt->type;
 
 		rctx.stmt = stmt;
 		dl = rule_update_dl_proto_ctx(&rctx);

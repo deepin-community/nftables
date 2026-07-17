@@ -42,6 +42,11 @@ if [ "$NFT_TEST_HAVE_json" != n ]; then
 	test $($NFT -j -e -a -f - <<< "$RULESET" |sed 's/\({"add":\)/\n\1/g' |grep '"handle"' |wc -l) -eq ${RULE_COUNT} || exit 1
 fi
 
+if [ "$NFT_TEST_HAVE_inet_nat" = n ]; then
+	echo "Test partially skipped due to missing inet nat support."
+	exit 77
+fi
+
 # Now an example from firewalld's testsuite
 #
 $NFT flush ruleset

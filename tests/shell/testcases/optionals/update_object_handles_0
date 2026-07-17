@@ -1,5 +1,7 @@
 #!/bin/bash
 
+# NFT_TEST_REQUIRES(NFT_TEST_HAVE_stateful_object_update)
+
 set -e
 $NFT add table test-ip
 $NFT add counter test-ip traffic-counter

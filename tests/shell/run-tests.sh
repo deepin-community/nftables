@@ -30,6 +30,23 @@ array_contains() {
 	return 1
 }
 
+array_remove_first() {
+	local _varname="$1"
+	local _needle="$2"
+	local _result=()
+	local _a
+
+	eval "local _input=( \"\${$_varname[@]}\" )"
+	for _a in "${_input[@]}" ; do
+		if [ -n "${_needle+x}" -a "$_needle" = "$_a" ] ; then
+			unset _needle
+		else
+			_result+=("$_a")
+		fi
+	done
+	eval "$_varname="'( "${_result[@]}" )'
+}
+
 colorize_keywords() {
 	local out_variable="$1"
 	local color="$2"
@@ -163,6 +180,7 @@ usage() {
 	echo " -R|--without-realroot : Sets NFT_TEST_HAS_REALROOT=n."
 	echo " -U|--no-unshare : Sets NFT_TEST_UNSHARE_CMD=\"\"."
 	echo " -k|--keep-logs  : Sets NFT_TEST_KEEP_LOGS=y."
+	echo " -x              : Sets NFT_TEST_VERBOSE_TEST=y."
 	echo " -s|--sequential : Sets NFT_TEST_JOBS=0, which also enables global cleanups."
 	echo "                   Also sets NFT_TEST_SHUFFLE_TESTS=n if left unspecified."
 	echo " -Q|--quick      : Sets NFT_TEST_SKIP_slow=y."
@@ -181,9 +199,12 @@ usage() {
 	echo " NFT_REAL=<CMD> : Real nft comand. Usually this is just the same as \$NFT,"
 	echo "                 however, you may set NFT='valgrind nft' and NFT_REAL to the real command."
 	echo " VERBOSE=*|y   : Enable verbose output."
-	echo " DUMPGEN=*|y   : Regenerate dump files. Dump files are only recreated if the"
-	echo "                 test completes successfully and the \"dumps\" directory for the"
-	echo "                 test exits."
+	echo " NFT_TEST_VERBOSE_TEST=*|y: if true, enable verbose output for tests. For bash scripts, this means"
+	echo "                 to pass \"-x\" to the interpreter."
+	echo " DUMPGEN=*|y|all : Regenerate dump files \".{nft,json-nft,nodump}\". \"DUMPGEN=y\" only regenerates existing"
+	echo "                 files, unless the test has no files (then all three files are generated, and you need to"
+	echo "                 choose which to keep). With \"DUMPGEN=all\" all 3 files are regenerated, regardless"
+	echo "                 whether they already exist."
 	echo " VALGRIND=*|y  : Run \$NFT in valgrind."
 	echo " KMEMLEAK=*|y  : Check for kernel memleaks."
 	echo " NFT_TEST_HAS_REALROOT=*|y : To indicate whether the test has real root permissions."
@@ -275,7 +296,10 @@ _NFT_TEST_JOBS_DEFAULT="$(nproc)"
 _NFT_TEST_JOBS_DEFAULT="$(( _NFT_TEST_JOBS_DEFAULT + (_NFT_TEST_JOBS_DEFAULT + 1) / 2 ))"
 
 VERBOSE="$(bool_y "$VERBOSE")"
-DUMPGEN="$(bool_y "$DUMPGEN")"
+NFT_TEST_VERBOSE_TEST="$(bool_y "$NFT_TEST_VERBOSE_TEST")"
+if [ "$DUMPGEN" != "all" ] ; then
+	DUMPGEN="$(bool_y "$DUMPGEN")"
+fi
 VALGRIND="$(bool_y "$VALGRIND")"
 KMEMLEAK="$(bool_y "$KMEMLEAK")"
 NFT_TEST_KEEP_LOGS="$(bool_y "$NFT_TEST_KEEP_LOGS")"
@@ -290,6 +314,7 @@ DO_LIST_TESTS=
 if [ -z "$NFT_TEST_RANDOM_SEED" ] ; then
 	# Choose a random value.
 	n="$SRANDOM"
+	[ -z "$n" ] && n="$RANDOM"
 else
 	# Parse as number.
 	n="$(strtonum "$NFT_TEST_RANDOM_SEED")"
@@ -326,6 +351,9 @@ while [ $# -gt 0 ] ; do
 			;;
 		-v)
 			VERBOSE=y
+			;;
+		-x)
+			NFT_TEST_VERBOSE_TEST=y
 			;;
 		-g)
 			DUMPGEN=y
@@ -574,6 +602,9 @@ for feat in "${_HAVE_OPTS[@]}" ; do
 		val="$(bool_n "${!var}")"
 	fi
 	eval "export $var=$val"
+	if [ "$NFT_TEST_HAS_UNSHARED" != y ] ; then
+		$NFT flush ruleset
+	fi
 done
 
 if [ "$NFT_TEST_JOBS" -eq 0 ] ; then
@@ -588,13 +619,14 @@ if [ ! -x "$DIFF" ] ; then
 	DIFF=true
 fi
 
+JOBS_PIDLIST_ARR=()
 declare -A JOBS_PIDLIST
 
 _NFT_TEST_VALGRIND_VGDB_PREFIX=
 
 cleanup_on_exit() {
 	pids_search=''
-	for pid in "${!JOBS_PIDLIST[@]}" ; do
+	for pid in "${JOBS_PIDLIST_ARR[@]}" ; do
 		kill -- "-$pid" &>/dev/null
 		pids_search="$pids_search\\|\\<$pid\\>"
 	done
@@ -627,6 +659,7 @@ exec &> >(tee "$NFT_TEST_TMPDIR/test.log")
 msg_info "conf: NFT=$(printf '%q' "$NFT")"
 msg_info "conf: NFT_REAL=$(printf '%q' "$NFT_REAL")"
 msg_info "conf: VERBOSE=$(printf '%q' "$VERBOSE")"
+msg_info "conf: NFT_TEST_VERBOSE_TEST=$(printf '%q' "$NFT_TEST_VERBOSE_TEST")"
 msg_info "conf: DUMPGEN=$(printf '%q' "$DUMPGEN")"
 msg_info "conf: VALGRIND=$(printf '%q' "$VALGRIND")"
 msg_info "conf: KMEMLEAK=$(printf '%q' "$KMEMLEAK")"
@@ -827,32 +860,53 @@ job_start() {
 	local testfile="$1"
 	local testidx="$2"
 
-	if [ "$NFT_TEST_JOBS" -le 1 ] ; then
+	if [ "$NFT_TEST_JOBS" -le 1 ] && [[ -t 1 ]]; then
 		print_test_header I "$testfile" "$testidx" "EXECUTING"
 	fi
 
 	NFT_TEST_TESTTMPDIR="${JOBS_TEMPDIR["$testfile"]}" \
-	NFT="$NFT" NFT_REAL="$NFT_REAL" DIFF="$DIFF" DUMPGEN="$DUMPGEN" $NFT_TEST_UNSHARE_CMD "$NFT_TEST_BASEDIR/helpers/test-wrapper.sh" "$testfile"
+	NFT="$NFT" \
+	NFT_REAL="$NFT_REAL" \
+	DIFF="$DIFF" \
+	DUMPGEN="$DUMPGEN" \
+	NFT_TEST_VERBOSE_TEST="$NFT_TEST_VERBOSE_TEST" \
+	$NFT_TEST_UNSHARE_CMD "$NFT_TEST_BASEDIR/helpers/test-wrapper.sh" "$testfile"
 	local rc_got=$?
 
-	if [ "$NFT_TEST_JOBS" -le 1 ] ; then
+	if [ "$NFT_TEST_JOBS" -le 1 ] && [[ -t 1 ]]; then
 		echo -en "\033[1A\033[K" # clean the [EXECUTING] foobar line
 	fi
 
 	return "$rc_got"
 }
 
+# `wait -p` is only supported since bash 5.1
+WAIT_SUPPORTS_P=1
+[ "${BASH_VERSINFO[0]}" -le 4 -o \( "${BASH_VERSINFO[0]}" -eq 5 -a "${BASH_VERSINFO[1]}" -eq 0 \) ] && WAIT_SUPPORTS_P=0
+
 job_wait()
 {
 	local num_jobs="$1"
+	local JOBCOMPLETED
+	local rc_got
 
-	while [ "$JOBS_N_RUNNING" -gt 0 -a "$JOBS_N_RUNNING" -ge "$num_jobs" ] ; do
-		wait -n -p JOBCOMPLETED
-		local rc_got="$?"
+	while [ "${#JOBS_PIDLIST_ARR[@]}" -gt 0 -a "${#JOBS_PIDLIST_ARR[@]}" -ge "$num_jobs" ] ; do
+		if [ "$WAIT_SUPPORTS_P" = 1 ] ; then
+			wait -n -p JOBCOMPLETED
+			rc_got="$?"
+			array_remove_first JOBS_PIDLIST_ARR "$JOBCOMPLETED"
+		else
+			# Without `wait -p` support, we need to explicitly wait
+			# for a PID. That reduces parallelism.
+			JOBCOMPLETED="${JOBS_PIDLIST_ARR[0]}"
+			JOBS_PIDLIST_ARR=( "${JOBS_PIDLIST_ARR[@]:1}" )
+			wait -n "$JOBCOMPLETED"
+			rc_got="$?"
+		fi
+
 		local testfile2="${JOBS_PIDLIST[$JOBCOMPLETED]}"
 		unset JOBS_PIDLIST[$JOBCOMPLETED]
 		print_test_result "${JOBS_TEMPDIR["$testfile2"]}" "$testfile2" "$rc_got"
-		((JOBS_N_RUNNING--))
 		check_kmemleak
 	done
 }
@@ -862,7 +916,6 @@ if [ "$NFT_TEST_SHUFFLE_TESTS" = y ] ; then
 fi
 
 TESTIDX=0
-JOBS_N_RUNNING=0
 for testfile in "${TESTS[@]}" ; do
 	job_wait "$NFT_TEST_JOBS"
 
@@ -881,7 +934,7 @@ for testfile in "${TESTS[@]}" ; do
 	pid=$!
 	eval "$set_old_state"
 	JOBS_PIDLIST[$pid]="$testfile"
-	((JOBS_N_RUNNING++))
+	JOBS_PIDLIST_ARR+=( "$pid" )
 done
 
 job_wait 0

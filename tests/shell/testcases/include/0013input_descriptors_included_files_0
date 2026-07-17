@@ -7,31 +7,31 @@
 # instead of return value of nft.
 
 
-tmpfile1=$(mktemp -p .)
-if [ ! -w $tmpfile1 ] ; then
+tmpfile1=$(mktemp)
+if [ ! -w "$tmpfile1" ] ; then
         echo "Failed to create tmp file" >&2
-        exit 0
-fi
-
-tmpfile2=$(mktemp -p .)
-if [ ! -w $tmpfile2 ] ; then
-        echo "Failed to create tmp file" >&2
-        exit 0
-fi
-
-tmpfile3=$(mktemp -p .)
-if [ ! -w $tmpfile3 ] ; then
-        echo "Failed to create tmp file" >&2
-        exit 0
-fi
-
-tmpfile4=$(mktemp -p .)
-if [ ! -w $tmpfile4 ]; then
-        echo "Failed to create tmp file" >&2
-        exit 0
+        exit 1
 fi
 
 trap "rm -rf $tmpfile1 $tmpfile2 $tmpfile3 $tmpfile4" EXIT # cleanup if aborted
+
+tmpfile2=$(mktemp)
+if [ ! -w "$tmpfile2" ] ; then
+        echo "Failed to create tmp file" >&2
+        exit 1
+fi
+
+tmpfile3=$(mktemp)
+if [ ! -w "$tmpfile3" ] ; then
+        echo "Failed to create tmp file" >&2
+        exit 1
+fi
+
+tmpfile4=$(mktemp)
+if [ ! -w "$tmpfile4" ]; then
+        echo "Failed to create tmp file" >&2
+        exit 1
+fi
 
 RULESET1="include \"$tmpfile2\""
 RULESET2="include \"$tmpfile3\""
@@ -44,7 +44,7 @@ echo "$RULESET3" > $tmpfile2
 
 $NFT -f $tmpfile1 2> $tmpfile4
 
-var=$(awk -F: '$4==" Error"{print $1;exit;}' $tmpfile4)
+var=$(awk -F: '$4==" Error"{print $1;exit;}' "$tmpfile4")
 
 if [ $var == "$tmpfile3" ]; then
 	echo "E: Test failed" >&2

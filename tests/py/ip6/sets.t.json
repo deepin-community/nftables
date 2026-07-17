@@ -148,3 +148,40 @@
     }
 ]
 
+# add @map2 { ip6 saddr . ip6 daddr . th dport : 1234::1 . 80 }
+[
+    {
+        "map": {
+            "data": {
+                "concat": [
+                    "1234::1",
+                    80
+                ]
+            },
+            "elem": {
+                "concat": [
+                    {
+                        "payload": {
+                            "field": "saddr",
+                            "protocol": "ip6"
+                        }
+                    },
+                    {
+                        "payload": {
+                            "field": "daddr",
+                            "protocol": "ip6"
+                        }
+                    },
+                    {
+                        "payload": {
+                            "field": "dport",
+                            "protocol": "th"
+                        }
+                    }
+                ]
+            },
+            "map": "@map2",
+            "op": "add"
+        }
+    }
+]

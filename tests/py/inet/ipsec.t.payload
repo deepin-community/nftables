@@ -16,8 +16,7 @@ ip ipsec-ip4 ipsec-input
 # ipsec out spi 1-561
 inet ipsec-inet ipsec-post
   [ xfrm load out 0 spi => reg 1 ]
-  [ cmp gte reg 1 0x01000000 ]
-  [ cmp lte reg 1 0x31020000 ]
+  [ range eq reg 1 0x01000000 0x31020000 ]
 
 # ipsec in spnum 2 ip saddr { 1.2.3.4, 10.6.0.0/16 }
 __set%d ipsec-ip4 7 size 5

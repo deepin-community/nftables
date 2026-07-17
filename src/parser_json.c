@@ -18,6 +18,7 @@
 #include <netlink.h>
 #include <parser.h>
 #include <rule.h>
+#include <cmd.h>
 #include <sctp_chunk.h>
 #include <socket.h>
 
@@ -49,6 +50,7 @@
 #define CTX_F_SES	(1 << 6)	/* set_elem_expr_stmt */
 #define CTX_F_MAP	(1 << 7)	/* LHS of map_expr */
 #define CTX_F_CONCAT	(1 << 8)	/* inside concat_expr */
+#define CTX_F_COLLAPSED	(1 << 9)
 
 struct json_ctx {
 	struct nft_ctx *nft;
@@ -121,7 +123,6 @@ static void json_lib_error(struct json_ctx *ctx, json_error_t *err)
 		.indesc = &json_indesc,
 		.line_offset = err->position - err->column,
 		.first_line = err->line,
-		.last_line = err->line,
 		.first_column = err->column,
 		/* no information where problematic part ends :( */
 		.last_column = err->column,
@@ -181,8 +182,11 @@ static int json_unpack_stmt(struct json_ctx *ctx, json_t *root,
 	assert(value);
 
 	if (json_object_size(root) != 1) {
+		const char *dump = json_dumps(root, 0);
+
 		json_error(ctx, "Malformed object (too many properties): '%s'.",
-			   json_dumps(root, 0));
+			   dump);
+		free_const(dump);
 		return 1;
 	}
 
@@ -592,6 +596,13 @@ static struct expr *json_parse_payload_expr(struct json_ctx *ctx,
 			json_error(ctx, "Invalid payload base '%s'.", base);
 			return NULL;
 		}
+
+		if (len <= 0 || len > (int)NFT_MAX_EXPR_LEN_BITS) {
+			json_error(ctx, "Payload length must be between 0 and %lu, got %d",
+				   NFT_MAX_EXPR_LEN_BITS, len);
+			return NULL;
+		}
+
 		expr = payload_expr_alloc(int_loc, NULL, 0);
 		payload_init_raw(expr, val, offset, len);
 		expr->byteorder		= BYTEORDER_BIG_ENDIAN;
@@ -662,6 +673,12 @@ static struct expr *json_parse_tcp_option_expr(struct json_ctx *ctx,
 
 		if (kind < 0 || kind > 255)
 			return NULL;
+
+		if (len < 0 || len > (int)NFT_MAX_EXPR_LEN_BITS) {
+			json_error(ctx, "option length must be between 0 and %lu, got %d",
+				   NFT_MAX_EXPR_LEN_BITS, len);
+			return NULL;
+		}
 
 		expr = tcpopt_expr_alloc(int_loc, kind,
 					 TCPOPT_COMMON_KIND);
@@ -1191,6 +1208,32 @@ static struct expr *json_parse_binop_expr(struct json_ctx *ctx,
 		return NULL;
 	}
 
+	if (json_array_size(root) > 2) {
+		left = json_parse_primary_expr(ctx, json_array_get(root, 0));
+		if (!left) {
+			json_error(ctx, "Failed to parse LHS of binop expression.");
+			return NULL;
+		}
+		right = json_parse_primary_expr(ctx, json_array_get(root, 1));
+		if (!right) {
+			json_error(ctx, "Failed to parse RHS of binop expression.");
+			expr_free(left);
+			return NULL;
+		}
+		left = binop_expr_alloc(int_loc, thisop, left, right);
+		for (i = 2; i < json_array_size(root); i++) {
+			jright = json_array_get(root, i);
+			right = json_parse_primary_expr(ctx, jright);
+			if (!right) {
+				json_error(ctx, "Failed to parse RHS of binop expression.");
+				expr_free(left);
+				return NULL;
+			}
+			left = binop_expr_alloc(int_loc, thisop, left, right);
+		}
+		return left;
+	}
+
 	if (json_unpack_err(ctx, root, "[o, o!]", &jleft, &jright))
 		return NULL;
 
@@ -1206,6 +1249,16 @@ static struct expr *json_parse_binop_expr(struct json_ctx *ctx,
 		return NULL;
 	}
 	return binop_expr_alloc(int_loc, thisop, left, right);
+}
+
+static struct expr *json_check_concat_expr(struct json_ctx *ctx, struct expr *e)
+{
+	if (e->size >= 2)
+		return e;
+
+	json_error(ctx, "Concatenation with %d elements is illegal", e->size);
+	expr_free(e);
+	return NULL;
 }
 
 static struct expr *json_parse_concat_expr(struct json_ctx *ctx,
@@ -1241,7 +1294,7 @@ static struct expr *json_parse_concat_expr(struct json_ctx *ctx,
 		}
 		compound_expr_add(expr, tmp);
 	}
-	return expr;
+	return expr ? json_check_concat_expr(ctx, expr) : NULL;
 }
 
 static struct expr *json_parse_prefix_expr(struct json_ctx *ctx,
@@ -1280,6 +1333,7 @@ static struct expr *json_parse_range_expr(struct json_ctx *ctx,
 	expr_high = json_parse_primary_expr(ctx, high);
 	if (!expr_high) {
 		json_error(ctx, "Invalid high value in range expression.");
+		expr_free(expr_low);
 		return NULL;
 	}
 	return range_expr_alloc(int_loc, expr_low, expr_high);
@@ -1316,9 +1370,13 @@ static struct expr *json_parse_verdict_expr(struct json_ctx *ctx,
 		if (strcmp(type, verdict_tbl[i].name))
 			continue;
 
-		if (verdict_tbl[i].need_chain &&
-		    json_unpack_err(ctx, root, "{s:s}", "target", &chain))
-			return NULL;
+		if (verdict_tbl[i].need_chain) {
+			if (json_unpack_err(ctx, root, "{s:s}", "target", &chain))
+				return NULL;
+
+			if (!chain || chain[0] == '\0')
+				return NULL;
+		}
 
 		return verdict_expr_alloc(int_loc, verdict_tbl[i].verdict,
 					  json_alloc_chain_expr(chain));
@@ -1526,12 +1584,12 @@ static struct expr *json_parse_expr(struct json_ctx *ctx, json_t *root)
 		{ "ip option", json_parse_ip_option_expr, CTX_F_PRIMARY | CTX_F_SET_RHS | CTX_F_MANGLE | CTX_F_SES | CTX_F_CONCAT },
 		{ "sctp chunk", json_parse_sctp_chunk_expr, CTX_F_PRIMARY | CTX_F_SET_RHS | CTX_F_MANGLE | CTX_F_SES | CTX_F_CONCAT },
 		{ "dccp option", json_parse_dccp_option_expr, CTX_F_PRIMARY },
-		{ "meta", json_parse_meta_expr, CTX_F_STMT | CTX_F_PRIMARY | CTX_F_SET_RHS | CTX_F_MANGLE | CTX_F_SES | CTX_F_MAP | CTX_F_CONCAT },
+		{ "meta", json_parse_meta_expr, CTX_F_RHS | CTX_F_STMT | CTX_F_PRIMARY | CTX_F_SET_RHS | CTX_F_MANGLE | CTX_F_SES | CTX_F_MAP | CTX_F_CONCAT },
 		{ "osf", json_parse_osf_expr, CTX_F_STMT | CTX_F_PRIMARY | CTX_F_MAP | CTX_F_CONCAT },
 		{ "ipsec", json_parse_xfrm_expr, CTX_F_PRIMARY | CTX_F_MAP | CTX_F_CONCAT },
 		{ "socket", json_parse_socket_expr, CTX_F_PRIMARY | CTX_F_CONCAT },
 		{ "rt", json_parse_rt_expr, CTX_F_STMT | CTX_F_PRIMARY | CTX_F_SET_RHS | CTX_F_SES | CTX_F_MAP | CTX_F_CONCAT },
-		{ "ct", json_parse_ct_expr, CTX_F_STMT | CTX_F_PRIMARY | CTX_F_SET_RHS | CTX_F_MANGLE | CTX_F_SES | CTX_F_MAP | CTX_F_CONCAT },
+		{ "ct", json_parse_ct_expr, CTX_F_RHS | CTX_F_STMT | CTX_F_PRIMARY | CTX_F_SET_RHS | CTX_F_MANGLE | CTX_F_SES | CTX_F_MAP | CTX_F_CONCAT },
 		{ "numgen", json_parse_numgen_expr, CTX_F_STMT | CTX_F_PRIMARY | CTX_F_SET_RHS | CTX_F_SES | CTX_F_MAP | CTX_F_CONCAT },
 		/* below two are hash expr */
 		{ "jhash", json_parse_hash_expr, CTX_F_STMT | CTX_F_PRIMARY | CTX_F_SET_RHS | CTX_F_SES | CTX_F_MAP | CTX_F_CONCAT },
@@ -1699,8 +1757,18 @@ static struct expr *json_parse_dtype_expr(struct json_ctx *ctx, json_t *root)
 			}
 			compound_expr_add(expr, i);
 		}
-		return expr;
+
+		return json_check_concat_expr(ctx, expr);
+	} else if (json_is_object(root)) {
+		const char *key;
+		json_t *val;
+
+		if (!json_unpack_stmt(ctx, root, &key, &val) &&
+		    !strcmp(key, "typeof")) {
+			return json_parse_expr(ctx, val);
+		}
 	}
+
 	json_error(ctx, "Invalid set datatype.");
 	return NULL;
 }
@@ -1861,6 +1929,8 @@ static struct stmt *json_parse_mangle_stmt(struct json_ctx *ctx,
 		return stmt;
 	default:
 		json_error(ctx, "Invalid mangle statement key expression type.");
+		expr_free(key);
+		expr_free(value);
 		return NULL;
 	}
 }
@@ -2318,17 +2388,17 @@ static struct stmt *json_parse_reject_stmt(struct json_ctx *ctx,
 			stmt->reject.icmp_code = 0;
 		} else if (!strcmp(type, "icmpx")) {
 			stmt->reject.type = NFT_REJECT_ICMPX_UNREACH;
-			dtype = &icmpx_code_type;
+			dtype = &reject_icmpx_code_type;
 			stmt->reject.icmp_code = 0;
 		} else if (!strcmp(type, "icmp")) {
 			stmt->reject.type = NFT_REJECT_ICMP_UNREACH;
 			stmt->reject.family = NFPROTO_IPV4;
-			dtype = &icmp_code_type;
+			dtype = &reject_icmp_code_type;
 			stmt->reject.icmp_code = 0;
 		} else if (!strcmp(type, "icmpv6")) {
 			stmt->reject.type = NFT_REJECT_ICMP_UNREACH;
 			stmt->reject.family = NFPROTO_IPV6;
-			dtype = &icmpv6_code_type;
+			dtype = &reject_icmpv6_code_type;
 			stmt->reject.icmp_code = 0;
 		}
 	}
@@ -2344,27 +2414,42 @@ static struct stmt *json_parse_reject_stmt(struct json_ctx *ctx,
 	return stmt;
 }
 
-static void json_parse_set_stmt_list(struct json_ctx *ctx,
-				     struct list_head *stmt_list,
-				     json_t *stmt_json)
+static int json_parse_set_stmt_list(struct json_ctx *ctx,
+				    struct list_head *stmt_list,
+				    json_t *stmt_json)
 {
 	struct list_head *head;
-	struct stmt *tmp;
+	struct stmt *stmt;
 	json_t *value;
 	size_t index;
 
 	if (!stmt_json)
-		return;
+		return 0;
 
-	if (!json_is_array(stmt_json))
+	if (!json_is_array(stmt_json)) {
 		json_error(ctx, "Unexpected object type in stmt");
+		return -1;
+	}
 
 	head = stmt_list;
 	json_array_foreach(stmt_json, index, value) {
-		tmp = json_parse_stmt(ctx, value);
-		list_add(&tmp->list, head);
-		head = &tmp->list;
+		stmt = json_parse_stmt(ctx, value);
+		if (!stmt) {
+			json_error(ctx, "Parsing set statements array at index %zd failed.", index);
+			stmt_list_free(stmt_list);
+			return -1;
+		}
+		if (!(stmt->flags & STMT_F_STATEFUL)) {
+			stmt_free(stmt);
+			json_error(ctx, "Unsupported set statements array at index %zd failed.", index);
+			stmt_list_free(stmt_list);
+			return -1;
+		}
+		list_add(&stmt->list, head);
+		head = &stmt->list;
 	}
+
+	return 0;
 }
 
 static struct stmt *json_parse_set_stmt(struct json_ctx *ctx,
@@ -2409,8 +2494,11 @@ static struct stmt *json_parse_set_stmt(struct json_ctx *ctx,
 	stmt->set.key = expr;
 	stmt->set.set = expr2;
 
-	if (!json_unpack(value, "{s:o}", "stmt", &stmt_json))
-		json_parse_set_stmt_list(ctx, &stmt->set.stmt_list, stmt_json);
+	if (!json_unpack(value, "{s:o}", "stmt", &stmt_json) &&
+	    json_parse_set_stmt_list(ctx, &stmt->set.stmt_list, stmt_json) < 0) {
+		stmt_free(stmt);
+		return NULL;
+	}
 
 	return stmt;
 }
@@ -2466,8 +2554,11 @@ static struct stmt *json_parse_map_stmt(struct json_ctx *ctx,
 	stmt->map.data = expr_data;
 	stmt->map.set = expr2;
 
-	if (!json_unpack(value, "{s:o}", "stmt", &stmt_json))
-		json_parse_set_stmt_list(ctx, &stmt->set.stmt_list, stmt_json);
+	if (!json_unpack(value, "{s:o}", "stmt", &stmt_json) &&
+	    json_parse_set_stmt_list(ctx, &stmt->set.stmt_list, stmt_json) < 0) {
+		stmt_free(stmt);
+		return NULL;
+	}
 
 	return stmt;
 }
@@ -2540,9 +2631,7 @@ static struct stmt *json_parse_log_stmt(struct json_ctx *ctx,
 	stmt = log_stmt_alloc(int_loc);
 
 	if (!json_unpack(value, "{s:s}", "prefix", &tmpstr)) {
-		stmt->log.prefix = constant_expr_alloc(int_loc, &string_type,
-						       BYTEORDER_HOST_ENDIAN,
-						       (strlen(tmpstr) + 1) * BITS_PER_BYTE, tmpstr);
+		stmt->log.prefix = xstrdup(tmpstr);
 		stmt->log.flags |= STMT_LOG_PREFIX;
 	}
 	if (!json_unpack(value, "{s:i}", "group", &tmp)) {
@@ -2862,6 +2951,7 @@ static struct stmt *json_parse_optstrip_stmt(struct json_ctx *ctx,
 	    expr->etype != EXPR_EXTHDR ||
 	    expr->exthdr.op != NFT_EXTHDR_OP_TCPOPT) {
 		json_error(ctx, "Illegal TCP optstrip argument");
+		expr_free(expr);
 		return NULL;
 	}
 
@@ -2941,6 +3031,45 @@ static struct stmt *json_parse_stmt(struct json_ctx *ctx, json_t *root)
 	return NULL;
 }
 
+static int json_parse_table_flags(struct json_ctx *ctx, json_t *root,
+				  enum table_flags *flags)
+{
+	json_t *tmp, *tmp2;
+	size_t index;
+	int flag;
+
+	if (json_unpack(root, "{s:o}", "flags", &tmp))
+		return 0;
+
+	if (json_is_string(tmp)) {
+		flag = parse_table_flag(json_string_value(tmp));
+		if (flag) {
+			*flags = flag;
+			return 0;
+		}
+		json_error(ctx, "Invalid table flag '%s'.",
+			   json_string_value(tmp));
+		return 1;
+	}
+	if (!json_is_array(tmp)) {
+		json_error(ctx, "Unexpected table flags value.");
+		return 1;
+	}
+	json_array_foreach(tmp, index, tmp2) {
+		if (json_is_string(tmp2)) {
+			flag = parse_table_flag(json_string_value(tmp2));
+
+			if (flag) {
+				*flags |= flag;
+				continue;
+			}
+		}
+		json_error(ctx, "Invalid table flag at index %zu.", index);
+		return 1;
+	}
+	return 0;
+}
+
 static struct cmd *json_parse_cmd_add_table(struct json_ctx *ctx, json_t *root,
 					    enum cmd_ops op, enum cmd_obj obj)
 {
@@ -2949,6 +3078,7 @@ static struct cmd *json_parse_cmd_add_table(struct json_ctx *ctx, json_t *root,
 		.table.location = *int_loc,
 	};
 	struct table *table = NULL;
+	enum table_flags flags = 0;
 
 	if (json_unpack_err(ctx, root, "{s:s}",
 			    "family", &family))
@@ -2959,6 +3089,9 @@ static struct cmd *json_parse_cmd_add_table(struct json_ctx *ctx, json_t *root,
 			return NULL;
 
 		json_unpack(root, "{s:s}", "comment", &comment);
+		if (json_parse_table_flags(ctx, root, &flags))
+			return NULL;
+
 	} else if (op == CMD_DELETE &&
 		   json_unpack(root, "{s:s}", "name", &h.table.name) &&
 		   json_unpack(root, "{s:I}", "handle", &h.handle.id)) {
@@ -2972,10 +3105,12 @@ static struct cmd *json_parse_cmd_add_table(struct json_ctx *ctx, json_t *root,
 	if (h.table.name)
 		h.table.name = xstrdup(h.table.name);
 
-	if (comment) {
+	if (comment || flags) {
 		table = table_alloc();
 		handle_merge(&table->handle, &h);
-		table->comment = xstrdup(comment);
+		if (comment)
+			table->comment = xstrdup(comment);
+		table->flags = flags;
 	}
 
 	if (op == CMD_ADD)
@@ -3000,14 +3135,49 @@ static struct expr *parse_policy(const char *policy)
 				   sizeof(int) * BITS_PER_BYTE, &policy_num);
 }
 
+static struct expr *json_parse_devs(struct json_ctx *ctx, json_t *root)
+{
+	struct expr *tmp, *expr = compound_expr_alloc(int_loc, EXPR_LIST);
+	const char *dev;
+	json_t *value;
+	size_t index;
+
+	if (!json_unpack(root, "s", &dev)) {
+		tmp = constant_expr_alloc(int_loc, &string_type,
+					  BYTEORDER_HOST_ENDIAN,
+					  strlen(dev) * BITS_PER_BYTE, dev);
+		compound_expr_add(expr, tmp);
+		return expr;
+	}
+	if (!json_is_array(root)) {
+		expr_free(expr);
+		return NULL;
+	}
+
+	json_array_foreach(root, index, value) {
+		if (json_unpack(value, "s", &dev)) {
+			json_error(ctx, "Invalid device at index %zu.",
+				   index);
+			expr_free(expr);
+			return NULL;
+		}
+		tmp = constant_expr_alloc(int_loc, &string_type,
+					  BYTEORDER_HOST_ENDIAN,
+					  strlen(dev) * BITS_PER_BYTE, dev);
+		compound_expr_add(expr, tmp);
+	}
+	return expr;
+}
+
 static struct cmd *json_parse_cmd_add_chain(struct json_ctx *ctx, json_t *root,
 					    enum cmd_ops op, enum cmd_obj obj)
 {
 	struct handle h = {
 		.table.location = *int_loc,
 	};
-	const char *family = "", *policy = "", *type, *hookstr, *name, *comment = NULL;
+	const char *family = "", *policy = "", *type, *hookstr, *comment = NULL;
 	struct chain *chain = NULL;
+	json_t *devs = NULL;
 	int prio;
 
 	if (json_unpack_err(ctx, root, "{s:s, s:s}",
@@ -3058,28 +3228,24 @@ static struct cmd *json_parse_cmd_add_chain(struct json_ctx *ctx, json_t *root,
 	chain->hook.name = chain_hookname_lookup(hookstr);
 	if (!chain->hook.name) {
 		json_error(ctx, "Invalid chain hook '%s'.", hookstr);
-		chain_free(chain);
-		return NULL;
+		goto err_free_chain;
 	}
 
-	if (!json_unpack(root, "{s:s}", "dev", &name)) {
-		struct expr *dev_expr, *expr;
+	json_unpack(root, "{s:o}", "dev", &devs);
 
-		dev_expr = compound_expr_alloc(int_loc, EXPR_LIST);
-		expr = constant_expr_alloc(int_loc, &integer_type,
-					   BYTEORDER_HOST_ENDIAN,
-					   strlen(name) * BITS_PER_BYTE,
-					   name);
-		compound_expr_add(dev_expr, expr);
-		chain->dev_expr = dev_expr;
+	if (devs) {
+		chain->dev_expr = json_parse_devs(ctx, devs);
+		if (!chain->dev_expr) {
+			json_error(ctx, "Invalid chain dev.");
+			goto err_free_chain;
+		}
 	}
 
 	if (!json_unpack(root, "{s:s}", "policy", &policy)) {
 		chain->policy = parse_policy(policy);
 		if (!chain->policy) {
 			json_error(ctx, "Unknown policy '%s'.", policy);
-			chain_free(chain);
-			return NULL;
+			goto err_free_chain;
 		}
 	}
 
@@ -3088,6 +3254,11 @@ static struct cmd *json_parse_cmd_add_chain(struct json_ctx *ctx, json_t *root,
 
 	handle_merge(&chain->handle, &h);
 	return cmd_alloc(op, obj, &h, int_loc, chain);
+
+err_free_chain:
+	chain_free(chain);
+	handle_free(&h);
+	return NULL;
 }
 
 static struct cmd *json_parse_cmd_add_rule(struct json_ctx *ctx, json_t *root,
@@ -3127,6 +3298,7 @@ static struct cmd *json_parse_cmd_add_rule(struct json_ctx *ctx, json_t *root,
 
 	if (!json_is_array(tmp)) {
 		json_error(ctx, "Value of property \"expr\" must be an array.");
+		handle_free(&h);
 		return NULL;
 	}
 
@@ -3146,16 +3318,14 @@ static struct cmd *json_parse_cmd_add_rule(struct json_ctx *ctx, json_t *root,
 		if (!json_is_object(value)) {
 			json_error(ctx, "Unexpected expr array element of type %s, expected object.",
 				   json_typename(value));
-			rule_free(rule);
-			return NULL;
+			goto err_free_rule;
 		}
 
 		stmt = json_parse_stmt(ctx, value);
 
 		if (!stmt) {
 			json_error(ctx, "Parsing expr array at index %zd failed.", index);
-			rule_free(rule);
-			return NULL;
+			goto err_free_rule;
 		}
 
 		rule_stmt_append(rule, stmt);
@@ -3165,19 +3335,28 @@ static struct cmd *json_parse_cmd_add_rule(struct json_ctx *ctx, json_t *root,
 		json_object_del(root, "handle");
 
 	return cmd_alloc(op, obj, &h, int_loc, rule);
+
+err_free_rule:
+	rule_free(rule);
+	handle_free(&h);
+	return NULL;
 }
 
 static int string_to_nft_object(const char *str)
 {
 	const char *obj_tbl[__NFT_OBJECT_MAX] = {
-		[NFT_OBJECT_COUNTER] = "counter",
-		[NFT_OBJECT_QUOTA] = "quota",
-		[NFT_OBJECT_LIMIT] = "limit",
-		[NFT_OBJECT_SECMARK] = "secmark",
+		[NFT_OBJECT_COUNTER]	= "counter",
+		[NFT_OBJECT_QUOTA]	= "quota",
+		[NFT_OBJECT_CT_HELPER]	= "ct helper",
+		[NFT_OBJECT_LIMIT]	= "limit",
+		[NFT_OBJECT_CT_TIMEOUT]	= "ct timeout",
+		[NFT_OBJECT_SECMARK]	= "secmark",
+		[NFT_OBJECT_CT_EXPECT]	= "ct expectation",
+		[NFT_OBJECT_SYNPROXY]	= "synproxy",
 	};
 	unsigned int i;
 
-	for (i = 0; i < NFT_OBJECT_MAX; i++) {
+	for (i = 0; i <= NFT_OBJECT_MAX; i++) {
 		if (obj_tbl[i] && !strcmp(str, obj_tbl[i]))
 			return i;
 	}
@@ -3208,7 +3387,7 @@ static struct cmd *json_parse_cmd_add_set(struct json_ctx *ctx, json_t *root,
 					  enum cmd_ops op, enum cmd_obj obj)
 {
 	struct handle h = { 0 };
-	const char *family = "", *policy, *dtype_ext = NULL;
+	const char *family = "", *policy;
 	json_t *tmp, *stmt_json;
 	struct set *set;
 
@@ -3261,19 +3440,21 @@ static struct cmd *json_parse_cmd_add_set(struct json_ctx *ctx, json_t *root,
 		return NULL;
 	}
 
-	if (!json_unpack(root, "{s:s}", "map", &dtype_ext)) {
-		const struct datatype *dtype;
+	if (!json_unpack(root, "{s:o}", "map", &tmp)) {
+		if (json_is_string(tmp)) {
+			const char *s = json_string_value(tmp);
 
-		set->objtype = string_to_nft_object(dtype_ext);
+			set->objtype = string_to_nft_object(s);
+		}
 		if (set->objtype) {
 			set->flags |= NFT_SET_OBJECT;
-		} else if ((dtype = datatype_lookup_byname(dtype_ext))) {
-			set->data = constant_expr_alloc(&netlink_location,
-							dtype, dtype->byteorder,
-							dtype->size, NULL);
+		} else if ((set->data = json_parse_dtype_expr(ctx, tmp))) {
 			set->flags |= NFT_SET_MAP;
 		} else {
-			json_error(ctx, "Invalid map type '%s'.", dtype_ext);
+			const char *dump = json_dumps(tmp, 0);
+
+			json_error(ctx, "Invalid map type '%s'.", dump);
+			free_const(dump);
 			set_free(set);
 			handle_free(&h);
 			return NULL;
@@ -3322,9 +3503,14 @@ static struct cmd *json_parse_cmd_add_set(struct json_ctx *ctx, json_t *root,
 	if (!json_unpack(root, "{s:i}", "gc-interval", &set->gc_int))
 		set->gc_int *= 1000;
 	json_unpack(root, "{s:i}", "size", &set->desc.size);
+	json_unpack(root, "{s:b}", "auto-merge", &set->automerge);
 
-	if (!json_unpack(root, "{s:o}", "stmt", &stmt_json))
-		json_parse_set_stmt_list(ctx, &set->stmt_list, stmt_json);
+	if (!json_unpack(root, "{s:o}", "stmt", &stmt_json) &&
+	    json_parse_set_stmt_list(ctx, &set->stmt_list, stmt_json) < 0) {
+		set_free(set);
+		handle_free(&h);
+		return NULL;
+	}
 
 	handle_merge(&set->handle, &h);
 
@@ -3363,42 +3549,16 @@ static struct cmd *json_parse_cmd_add_element(struct json_ctx *ctx,
 		handle_free(&h);
 		return NULL;
 	}
-	return cmd_alloc(op, cmd_obj, &h, int_loc, expr);
-}
 
-static struct expr *json_parse_flowtable_devs(struct json_ctx *ctx,
-					      json_t *root)
-{
-	struct expr *tmp, *expr = compound_expr_alloc(int_loc, EXPR_LIST);
-	const char *dev;
-	json_t *value;
-	size_t index;
-
-	if (!json_unpack(root, "s", &dev)) {
-		tmp = constant_expr_alloc(int_loc, &string_type,
-					  BYTEORDER_HOST_ENDIAN,
-					  strlen(dev) * BITS_PER_BYTE, dev);
-		compound_expr_add(expr, tmp);
-		return expr;
-	}
-	if (!json_is_array(root)) {
+	if ((op == CMD_CREATE || op == CMD_ADD) &&
+	    nft_cmd_collapse_elems(op, ctx->cmds, &h, expr)) {
+		handle_free(&h);
 		expr_free(expr);
+		ctx->flags |= CTX_F_COLLAPSED;
 		return NULL;
 	}
 
-	json_array_foreach(root, index, value) {
-		if (json_unpack(value, "s", &dev)) {
-			json_error(ctx, "Invalid flowtable dev at index %zu.",
-				   index);
-			expr_free(expr);
-			return NULL;
-		}
-		tmp = constant_expr_alloc(int_loc, &string_type,
-					  BYTEORDER_HOST_ENDIAN,
-					  strlen(dev) * BITS_PER_BYTE, dev);
-		compound_expr_add(expr, tmp);
-	}
-	return expr;
+	return cmd_alloc(op, cmd_obj, &h, int_loc, expr);
 }
 
 static struct cmd *json_parse_cmd_add_flowtable(struct json_ctx *ctx,
@@ -3461,7 +3621,7 @@ static struct cmd *json_parse_cmd_add_flowtable(struct json_ctx *ctx,
 				    sizeof(int) * BITS_PER_BYTE, &prio);
 
 	if (devs) {
-		flowtable->dev_expr = json_parse_flowtable_devs(ctx, devs);
+		flowtable->dev_expr = json_parse_devs(ctx, devs);
 		if (!flowtable->dev_expr) {
 			json_error(ctx, "Invalid flowtable dev.");
 			flowtable_free(flowtable);
@@ -3573,8 +3733,7 @@ static struct cmd *json_parse_cmd_add_object(struct json_ctx *ctx,
 			if (ret < 0 || ret >= (int)sizeof(obj->secmark.ctx)) {
 				json_error(ctx, "Invalid secmark context '%s', max length is %zu.",
 					   tmp, sizeof(obj->secmark.ctx));
-				obj_free(obj);
-				return NULL;
+				goto err_free_obj;
 			}
 		}
 		break;
@@ -3590,8 +3749,7 @@ static struct cmd *json_parse_cmd_add_object(struct json_ctx *ctx,
 			    ret >= (int)sizeof(obj->ct_helper.name)) {
 				json_error(ctx, "Invalid CT helper type '%s', max length is %zu.",
 					   tmp, sizeof(obj->ct_helper.name));
-				obj_free(obj);
-				return NULL;
+				goto err_free_obj;
 			}
 		}
 		if (!json_unpack(root, "{s:s}", "protocol", &tmp)) {
@@ -3601,20 +3759,19 @@ static struct cmd *json_parse_cmd_add_object(struct json_ctx *ctx,
 				obj->ct_helper.l4proto = IPPROTO_UDP;
 			} else {
 				json_error(ctx, "Invalid ct helper protocol '%s'.", tmp);
-				obj_free(obj);
-				return NULL;
+				goto err_free_obj;
 			}
 		}
 		if (!json_unpack(root, "{s:s}", "l3proto", &tmp) &&
 		    parse_family(tmp, &l3proto)) {
 			json_error(ctx, "Invalid ct helper l3proto '%s'.", tmp);
-			obj_free(obj);
-			return NULL;
+			goto err_free_obj;
 		}
 		obj->ct_helper.l3proto = l3proto;
 		break;
 	case NFT_OBJECT_CT_TIMEOUT:
 		cmd_obj = CMD_OBJ_CT_TIMEOUT;
+		init_list_head(&obj->ct_timeout.timeout_list);
 		obj->type = NFT_OBJECT_CT_TIMEOUT;
 		if (!json_unpack(root, "{s:s}", "protocol", &tmp)) {
 			if (!strcmp(tmp, "tcp")) {
@@ -3623,23 +3780,18 @@ static struct cmd *json_parse_cmd_add_object(struct json_ctx *ctx,
 				obj->ct_timeout.l4proto = IPPROTO_UDP;
 			} else {
 				json_error(ctx, "Invalid ct timeout protocol '%s'.", tmp);
-				obj_free(obj);
-				return NULL;
+				goto err_free_obj;
 			}
 		}
 		if (!json_unpack(root, "{s:s}", "l3proto", &tmp) &&
 		    parse_family(tmp, &l3proto)) {
 			json_error(ctx, "Invalid ct timeout l3proto '%s'.", tmp);
-			obj_free(obj);
-			return NULL;
+			goto err_free_obj;
 		}
 		obj->ct_timeout.l3proto = l3proto;
 
-		init_list_head(&obj->ct_timeout.timeout_list);
-		if (json_parse_ct_timeout_policy(ctx, root, obj)) {
-			obj_free(obj);
-			return NULL;
-		}
+		if (json_parse_ct_timeout_policy(ctx, root, obj))
+			goto err_free_obj;
 		break;
 	case NFT_OBJECT_CT_EXPECT:
 		cmd_obj = CMD_OBJ_CT_EXPECT;
@@ -3647,8 +3799,7 @@ static struct cmd *json_parse_cmd_add_object(struct json_ctx *ctx,
 		if (!json_unpack(root, "{s:s}", "l3proto", &tmp) &&
 		    parse_family(tmp, &l3proto)) {
 			json_error(ctx, "Invalid ct expectation l3proto '%s'.", tmp);
-			obj_free(obj);
-			return NULL;
+			goto err_free_obj;
 		}
 		obj->ct_expect.l3proto = l3proto;
 		if (!json_unpack(root, "{s:s}", "protocol", &tmp)) {
@@ -3658,8 +3809,7 @@ static struct cmd *json_parse_cmd_add_object(struct json_ctx *ctx,
 				obj->ct_expect.l4proto = IPPROTO_UDP;
 			} else {
 				json_error(ctx, "Invalid ct expectation protocol '%s'.", tmp);
-				obj_free(obj);
-				return NULL;
+				goto err_free_obj;
 			}
 		}
 		if (!json_unpack(root, "{s:i}", "dport", &i))
@@ -3673,10 +3823,9 @@ static struct cmd *json_parse_cmd_add_object(struct json_ctx *ctx,
 		obj->type = NFT_OBJECT_LIMIT;
 		if (json_unpack_err(ctx, root, "{s:I, s:s}",
 				    "rate", &obj->limit.rate,
-				    "per", &tmp)) {
-			obj_free(obj);
-			return NULL;
-		}
+				    "per", &tmp))
+			goto err_free_obj;
+
 		json_unpack(root, "{s:s}", "rate_unit", &rate_unit);
 		json_unpack(root, "{s:b}", "inv", &inv);
 		json_unpack(root, "{s:i}", "burst", &obj->limit.burst);
@@ -3697,20 +3846,18 @@ static struct cmd *json_parse_cmd_add_object(struct json_ctx *ctx,
 	case CMD_OBJ_SYNPROXY:
 		obj->type = NFT_OBJECT_SYNPROXY;
 		if (json_unpack_err(ctx, root, "{s:i, s:i}",
-				    "mss", &i, "wscale", &j)) {
-			obj_free(obj);
-			return NULL;
-		}
+				    "mss", &i, "wscale", &j))
+			goto err_free_obj;
+
 		obj->synproxy.mss = i;
 		obj->synproxy.wscale = j;
 		obj->synproxy.flags |= NF_SYNPROXY_OPT_MSS;
 		obj->synproxy.flags |= NF_SYNPROXY_OPT_WSCALE;
 		if (!json_unpack(root, "{s:o}", "flags", &jflags)) {
 			flags = json_parse_synproxy_flags(ctx, jflags);
-			if (flags < 0) {
-				obj_free(obj);
-				return NULL;
-			}
+			if (flags < 0)
+				goto err_free_obj;
+
 			obj->synproxy.flags |= flags;
 		}
 		break;
@@ -3722,6 +3869,11 @@ static struct cmd *json_parse_cmd_add_object(struct json_ctx *ctx,
 		json_object_del(root, "handle");
 
 	return cmd_alloc(op, cmd_obj, &h, int_loc, obj);
+
+err_free_obj:
+	obj_free(obj);
+	handle_free(&h);
+	return NULL;
 }
 
 static struct cmd *json_parse_cmd_add(struct json_ctx *ctx,
@@ -3746,7 +3898,8 @@ static struct cmd *json_parse_cmd_add(struct json_ctx *ctx,
 		{ "ct timeout", NFT_OBJECT_CT_TIMEOUT, json_parse_cmd_add_object },
 		{ "ct expectation", NFT_OBJECT_CT_EXPECT, json_parse_cmd_add_object },
 		{ "limit", CMD_OBJ_LIMIT, json_parse_cmd_add_object },
-		{ "secmark", CMD_OBJ_SECMARK, json_parse_cmd_add_object }
+		{ "secmark", CMD_OBJ_SECMARK, json_parse_cmd_add_object },
+		{ "synproxy", CMD_OBJ_SYNPROXY, json_parse_cmd_add_object }
 	};
 	unsigned int i;
 	json_t *tmp;
@@ -3835,8 +3988,7 @@ static struct cmd *json_parse_cmd_replace(struct json_ctx *ctx,
 		if (!json_is_object(value)) {
 			json_error(ctx, "Unexpected expr array element of type %s, expected object.",
 				   json_typename(value));
-			rule_free(rule);
-			return NULL;
+			goto err_free_replace;
 		}
 
 		stmt = json_parse_stmt(ctx, value);
@@ -3844,8 +3996,7 @@ static struct cmd *json_parse_cmd_replace(struct json_ctx *ctx,
 		if (!stmt) {
 			json_error(ctx, "Parsing expr array at index %zd failed.",
 				   index);
-			rule_free(rule);
-			return NULL;
+			goto err_free_replace;
 		}
 
 		rule_stmt_append(rule, stmt);
@@ -3855,6 +4006,11 @@ static struct cmd *json_parse_cmd_replace(struct json_ctx *ctx,
 		json_object_del(root, "handle");
 
 	return cmd_alloc(op, CMD_OBJ_RULE, &h, int_loc, rule);
+
+err_free_replace:
+	rule_free(rule);
+	handle_free(&h);
+	return NULL;
 }
 
 static struct cmd *json_parse_cmd_list_multiple(struct json_ctx *ctx,
@@ -4181,13 +4337,13 @@ static json_t *seqnum_to_json(const uint32_t seqnum)
 		cur = json_cmd_assoc_list;
 		json_cmd_assoc_list = cur->next;
 
-		key = cur->cmd->seqnum % CMD_ASSOC_HSIZE;
+		key = cur->cmd->seqnum_from % CMD_ASSOC_HSIZE;
 		hlist_add_head(&cur->hnode, &json_cmd_assoc_hash[key]);
 	}
 
 	key = seqnum % CMD_ASSOC_HSIZE;
 	hlist_for_each_entry(cur, n, &json_cmd_assoc_hash[key], hnode) {
-		if (cur->cmd->seqnum == seqnum)
+		if (cur->cmd->seqnum_from == seqnum)
 			return cur->json;
 	}
 
@@ -4231,6 +4387,11 @@ static int __json_parse(struct json_ctx *ctx)
 		cmd = json_parse_cmd(ctx, value);
 
 		if (!cmd) {
+			if (ctx->flags & CTX_F_COLLAPSED) {
+				ctx->flags &= ~CTX_F_COLLAPSED;
+				continue;
+			}
+
 			json_error(ctx, "Parsing command array at index %zd failed.", index);
 			return -1;
 		}
@@ -4284,6 +4445,13 @@ int nft_parse_json_filename(struct nft_ctx *nft, const char *filename,
 	json_error_t err;
 	int ret;
 
+	if (nft->stdin_buf) {
+		json_indesc.type = INDESC_STDIN;
+		json_indesc.name = "/dev/stdin";
+
+		return nft_parse_json_buffer(nft, nft->stdin_buf, msgs, cmds);
+	}
+
 	json_indesc.type = INDESC_FILE;
 	json_indesc.name = filename;
 
@@ -4317,6 +4485,7 @@ static int json_echo_error(struct netlink_mon_handler *monh,
 
 static uint64_t handle_from_nlmsg(const struct nlmsghdr *nlh)
 {
+	struct nftnl_flowtable *nlf;
 	struct nftnl_table *nlt;
 	struct nftnl_chain *nlc;
 	struct nftnl_rule *nlr;
@@ -4352,6 +4521,11 @@ static uint64_t handle_from_nlmsg(const struct nlmsghdr *nlh)
 		nlo = netlink_obj_alloc(nlh);
 		handle = nftnl_obj_get_u64(nlo, NFTNL_OBJ_HANDLE);
 		nftnl_obj_free(nlo);
+		break;
+	case NFT_MSG_NEWFLOWTABLE:
+		nlf = netlink_flowtable_alloc(nlh);
+		handle = nftnl_flowtable_get_u64(nlf, NFTNL_FLOWTABLE_HANDLE);
+		nftnl_flowtable_free(nlf);
 		break;
 	}
 	return handle;

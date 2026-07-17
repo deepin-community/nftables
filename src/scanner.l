@@ -80,7 +80,6 @@ static void update_pos(struct parser_state *state, struct location *loc,
 {
 	loc->indesc			= state->indesc;
 	loc->first_line			= state->indesc->lineno;
-	loc->last_line			= state->indesc->lineno;
 	loc->first_column		= state->indesc->column;
 	loc->last_column		= state->indesc->column + len - 1;
 	state->indesc->column		+= len;
@@ -89,9 +88,15 @@ static void update_pos(struct parser_state *state, struct location *loc,
 static void update_offset(struct parser_state *state, struct location *loc,
 			  unsigned int len)
 {
+	uint32_t line_offset;
+
 	state->indesc->token_offset	+= len;
-	loc->token_offset		= state->indesc->token_offset;
-	loc->line_offset		= state->indesc->line_offset;
+	if (state->indesc->line_offset > UINT32_MAX)
+		line_offset = UINT32_MAX;
+	else
+		line_offset = state->indesc->line_offset;
+
+	loc->line_offset		= line_offset;
 }
 
 static void reset_pos(struct parser_state *state, struct location *loc)
@@ -116,6 +121,7 @@ extern void	yyset_column(int, yyscan_t);
 
 space		[ ]
 tab		\t
+newline_crlf	\r\n
 newline		\n
 digit		[0-9]
 hexdigit	[0-9a-fA-F]
@@ -132,48 +138,47 @@ slash		\/
 timestring	([0-9]+d)?([0-9]+h)?([0-9]+m)?([0-9]+s)?([0-9]+ms)?
 
 hex4		([[:xdigit:]]{1,4})
+rfc4291_broader	(((:{hex4}){2})|(:{ip4addr}))
 v680		(({hex4}:){7}{hex4})
-v670		((:)((:{hex4}){7}))
-v671		((({hex4}:){1})((:{hex4}){6}))
-v672		((({hex4}:){2})((:{hex4}){5}))
-v673		((({hex4}:){3})((:{hex4}){4}))
-v674		((({hex4}:){4})((:{hex4}){3}))
-v675		((({hex4}:){5})((:{hex4}){2}))
+v670		((:)((:{hex4}){5}){rfc4291_broader})
+v671		((({hex4}:){1})((:{hex4}){4}){rfc4291_broader})
+v672		((({hex4}:){2})((:{hex4}){3}){rfc4291_broader})
+v673		((({hex4}:){3})((:{hex4}){2}){rfc4291_broader})
+v674		((({hex4}:){4})((:{hex4}){1}){rfc4291_broader})
+v675		((({hex4}:){5}){rfc4291_broader})
 v676		((({hex4}:){6})(:{hex4}{1}))
 v677		((({hex4}:){7})(:))
 v67		({v670}|{v671}|{v672}|{v673}|{v674}|{v675}|{v676}|{v677})
-v660		((:)((:{hex4}){6}))
-v661		((({hex4}:){1})((:{hex4}){5}))
-v662		((({hex4}:){2})((:{hex4}){4}))
-v663		((({hex4}:){3})((:{hex4}){3}))
-v664		((({hex4}:){4})((:{hex4}){2}))
+v660		((:)((:{hex4}){4}){rfc4291_broader})
+v661		((({hex4}:){1})((:{hex4}){3}){rfc4291_broader})
+v662		((({hex4}:){2})((:{hex4}){2}){rfc4291_broader})
+v663		((({hex4}:){3})((:{hex4}){1}){rfc4291_broader})
+v664		((({hex4}:){4}){rfc4291_broader})
 v665		((({hex4}:){5})((:{hex4}){1}))
 v666		((({hex4}:){6})(:))
 v66		({v660}|{v661}|{v662}|{v663}|{v664}|{v665}|{v666})
-v650		((:)((:{hex4}){5}))
-v651		((({hex4}:){1})((:{hex4}){4}))
-v652		((({hex4}:){2})((:{hex4}){3}))
-v653		((({hex4}:){3})((:{hex4}){2}))
+v650		((:)((:{hex4}){3}){rfc4291_broader})
+v651		((({hex4}:){1})((:{hex4}){2}){rfc4291_broader})
+v652		((({hex4}:){2})((:{hex4}){1}){rfc4291_broader})
+v653		((({hex4}:){3}){rfc4291_broader})
 v654		((({hex4}:){4})(:{hex4}{1}))
 v655		((({hex4}:){5})(:))
 v65		({v650}|{v651}|{v652}|{v653}|{v654}|{v655})
-v640		((:)((:{hex4}){4}))
-v641		((({hex4}:){1})((:{hex4}){3}))
-v642		((({hex4}:){2})((:{hex4}){2}))
+v640		((:)((:{hex4}){2}){rfc4291_broader})
+v641		((({hex4}:){1})((:{hex4}){1}){rfc4291_broader})
+v642		((({hex4}:){2}){rfc4291_broader})
 v643		((({hex4}:){3})((:{hex4}){1}))
 v644		((({hex4}:){4})(:))
 v64		({v640}|{v641}|{v642}|{v643}|{v644})
-v630		((:)((:{hex4}){3}))
-v631		((({hex4}:){1})((:{hex4}){2}))
+v630		((:)((:{hex4}){1}){rfc4291_broader})
+v631		((({hex4}:){1}){rfc4291_broader})
 v632		((({hex4}:){2})((:{hex4}){1}))
 v633		((({hex4}:){3})(:))
 v63		({v630}|{v631}|{v632}|{v633})
-v620		((:)((:{hex4}){2}))
-v620_rfc4291	((:)(:{ip4addr}))
+v620		((:){rfc4291_broader})
 v621		((({hex4}:){1})((:{hex4}){1}))
 v622		((({hex4}:){2})(:))
-v62_rfc4291	((:)(:[fF]{4})(:{ip4addr}))
-v62		({v620}|{v621}|{v622}|{v62_rfc4291}|{v620_rfc4291})
+v62		({v620}|{v621}|{v622})
 v610		((:)(:{hex4}{1}))
 v611		((({hex4}:){1})(:))
 v61		({v610}|{v611})
@@ -890,6 +895,8 @@ addrstring	({macaddr}|{ip4addr}|{ip6addr})
 				return STRING;
 			}
 
+{newline_crlf}		{	return CRLF; }
+
 \\{newline}		{
 				reset_pos(yyget_extra(yyscanner), yylloc);
 			}
@@ -1117,7 +1124,7 @@ static int include_glob(struct nft_ctx *nft, void *scanner, const char *pattern,
 	ret = glob(pattern, flags, NULL, &glob_data);
 	if (ret == 0) {
 		char *path;
-		int len;
+		size_t len;
 
 		/* reverse alphabetical order due to stack */
 		for (i = glob_data.gl_pathc; i > 0; i--) {
@@ -1176,39 +1183,58 @@ static bool search_in_include_path(const char *filename)
 		filename[0] != '/');
 }
 
+static int include_path_glob(struct nft_ctx *nft, void *scanner,
+			     const char *include_path, const char *filename,
+			     const struct location *loc)
+{
+	struct parser_state *state = yyget_extra(scanner);
+	struct error_record *erec;
+	char buf[PATH_MAX];
+	int ret;
+
+	ret = snprintf(buf, sizeof(buf), "%s/%s", include_path, filename);
+	if (ret < 0 || ret >= PATH_MAX) {
+		erec = error(loc, "Too long file path \"%s/%s\"\n",
+			     include_path, filename);
+		erec_queue(erec, state->msgs);
+		return -1;
+	}
+
+	ret = include_glob(nft, scanner, buf, loc);
+
+	/* error was already handled */
+	if (ret == -1)
+		return -1;
+	/* no wildcards and file was processed: break early. */
+	if (ret == 0)
+		return 0;
+
+	/* else 1 (no wildcards) or 2 (wildcards): keep
+	 * searching.
+	 */
+	return ret;
+}
+
 int scanner_include_file(struct nft_ctx *nft, void *scanner,
 			 const char *filename, const struct location *loc)
 {
 	struct parser_state *state = yyget_extra(scanner);
 	struct error_record *erec;
-	char buf[PATH_MAX];
 	unsigned int i;
 	int ret = -1;
 
 	if (search_in_include_path(filename)) {
 		for (i = 0; i < nft->num_include_paths; i++) {
-			ret = snprintf(buf, sizeof(buf), "%s/%s",
-				       nft->include_paths[i], filename);
-			if (ret < 0 || ret >= PATH_MAX) {
-				erec = error(loc, "Too long file path \"%s/%s\"\n",
-					     nft->include_paths[i], filename);
-				erec_queue(erec, state->msgs);
-				return -1;
-			}
-
-			ret = include_glob(nft, scanner, buf, loc);
-
-			/* error was already handled */
-			if (ret == -1)
-				return -1;
-			/* no wildcards and file was processed: break early. */
-			if (ret == 0)
-				return 0;
-
-			/* else 1 (no wildcards) or 2 (wildcards): keep
-			 * searching.
-			 */
+			ret = include_path_glob(nft, scanner,
+						nft->include_paths[i],
+						filename, loc);
+			if (ret <= 0)
+				return ret;
 		}
+		ret = include_path_glob(nft, scanner, DEFAULT_INCLUDE_PATH,
+					filename, loc);
+		if (ret <= 0)
+			return ret;
 	} else {
 		/* an absolute path (starts with '/') */
 		ret = include_glob(nft, scanner, filename, loc);
@@ -1261,8 +1287,8 @@ void *scanner_init(struct parser_state *state)
 static void input_descriptor_destroy(const struct input_descriptor *indesc)
 {
 	if (indesc->name)
-		xfree(indesc->name);
-	xfree(indesc);
+		free_const(indesc->name);
+	free_const(indesc);
 }
 
 static void input_descriptor_list_destroy(struct parser_state *state)
@@ -1284,7 +1310,7 @@ void scanner_destroy(struct nft_ctx *nft)
 	struct parser_state *state = yyget_extra(nft->scanner);
 
 	input_descriptor_list_destroy(state);
-	xfree(state->startcond_active);
+	free(state->startcond_active);
 
 	yylex_destroy(nft->scanner);
 }

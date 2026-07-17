@@ -62,6 +62,9 @@ extern struct expr *payload_expr_join(const struct expr *e1,
 
 bool payload_expr_trim(struct expr *expr, struct expr *mask,
 		       const struct proto_ctx *ctx, unsigned int *shift);
+bool payload_expr_trim_force(struct expr *expr, struct expr *mask,
+			     unsigned int *shift);
+bool stmt_payload_expr_trim(struct stmt *stmt, const struct proto_ctx *ctx);
 extern void payload_expr_expand(struct list_head *list, struct expr *expr,
 				const struct proto_ctx *ctx);
 extern void payload_expr_complete(struct expr *expr,
@@ -70,5 +73,7 @@ extern void payload_expr_complete(struct expr *expr,
 bool payload_expr_cmp(const struct expr *e1, const struct expr *e2);
 
 const struct proto_desc *find_proto_desc(const struct nftnl_udata *ud);
+
+extern const struct stmt_ops payload_stmt_ops;
 
 #endif /* NFTABLES_PAYLOAD_H */

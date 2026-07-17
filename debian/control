@@ -1,9 +1,9 @@
 Source: nftables
 Section: net
 Priority: important
-Maintainer: Debian Netfilter Packaging Team <pkg-netfilter-team@lists.alioth.debian.org>
+Maintainer: Debian Netfilter Packaging Team <team+pkg-netfilter-team@tracker.debian.org>
 Uploaders: Arturo Borrero Gonzalez <arturo@debian.org>,
-           Jeremy Sowden <jeremy@azazel.net>
+           Jeremy Sowden <azazel@debian.org>
 Build-Depends: automake,
                debhelper-compat (= 13),
                dh-python,
@@ -11,14 +11,15 @@ Build-Depends: automake,
                libgmp-dev,
                libjansson-dev,
                libmnl-dev,
-               libnftnl-dev (>= 1.2.6),
+               libnftnl-dev (>= 1.2.9),
+               libpython3-all-dev,
                libtool,
                libxtables-dev,
                pybuild-plugin-pyproject,
                python3-all:any,
                python3-setuptools
 Rules-Requires-Root: no
-Standards-Version: 4.6.2
+Standards-Version: 4.7.0
 Homepage: https://www.netfilter.org/
 Vcs-Git: https://salsa.debian.org/pkg-netfilter-team/pkg-nftables.git
 Vcs-Browser: https://salsa.debian.org/pkg-netfilter-team/pkg-nftables

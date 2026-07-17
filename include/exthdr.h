@@ -117,4 +117,6 @@ extern const struct exthdr_desc exthdr_dst;
 extern const struct exthdr_desc exthdr_mh;
 extern const struct datatype mh_type_type;
 
+extern const struct stmt_ops exthdr_stmt_ops;
+
 #endif /* NFTABLES_EXTHDR_H */

@@ -40,7 +40,9 @@ ct mark and 0x23 == 0x11;ok;ct mark & 0x00000023 == 0x00000011
 ct mark and 0x3 != 0x1;ok;ct mark & 0x00000003 != 0x00000001
 ct mark xor 0x23 == 0x11;ok;ct mark 0x00000032
 ct mark xor 0x3 != 0x1;ok;ct mark != 0x00000002
+
 ct mark set ct mark or 0x00000001;ok;ct mark set ct mark | 0x00000001
+ct mark set 0x00000001 or ct mark;ok;ct mark set ct mark | 0x00000001
 
 ct mark 0x00000032;ok
 ct mark != 0x00000032;ok
@@ -61,6 +63,7 @@ ct mark set 0x11;ok;ct mark set 0x00000011
 ct mark set mark;ok;ct mark set meta mark
 ct mark set (meta mark | 0x10) << 8;ok;ct mark set (meta mark | 0x00000010) << 8
 ct mark set mark map { 1 : 10, 2 : 20, 3 : 30 };ok;ct mark set meta mark map { 0x00000003 : 0x0000001e, 0x00000002 : 0x00000014, 0x00000001 : 0x0000000a}
+ct mark set ct mark and 0xffff0000 or meta mark and 0xffff;ok;ct mark set ct mark & 0xffff0000 | meta mark & 0x0000ffff
 
 ct mark set {0x11333, 0x11};fail
 ct zone set {123, 127};fail

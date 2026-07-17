@@ -51,6 +51,7 @@ table inet t {
 	chain c {
 		iifname @s accept
 		oifname @s accept
+		fib saddr oifname @s accept
 		tcp dport . iifname @sc accept
 		iifname . meta mark @nv accept
 	}

@@ -168,15 +168,18 @@ Either an integer or a date in ISO format. For example: "2019-06-06 17:00".
 Hour and seconds are optional and can be omitted if desired. If omitted,
 midnight will be assumed.
 The following three would be equivalent: "2019-06-06", "2019-06-06 00:00"
-and "2019-06-06 00:00:00".
+and "2019-06-06 00:00:00". Use a range expression such as
+"2019-06-06 10:00"-"2019-06-10 14:00" for matching a time range.
 When an integer is given, it is assumed to be a UNIX timestamp.
 |day|
 Either a day of week ("Monday", "Tuesday", etc.), or an integer between 0 and 6.
 Strings are matched case-insensitively, and a full match is not expected (e.g. "Mon" would match "Monday").
-When an integer is given, 0 is Sunday and 6 is Saturday.
+When an integer is given, 0 is Sunday and 6 is Saturday. Use a range expression
+such as "Monday"-"Wednesday" for matching a week day range.
 |hour|
 A string representing an hour in 24-hour format. Seconds can optionally be specified.
-For example, 17:00 and 17:00:00 would be equivalent.
+For example, 17:00 and 17:00:00 would be equivalent. Use a range expression such
+as "17:00"-"19:00" for matching a time range.
 |=============================
 
 .Using meta expressions
@@ -190,6 +193,9 @@ filter output oif eth0
 
 # incoming packet was subject to ipsec processing
 raw prerouting meta ipsec exists accept
+
+# match incoming packet from 03:00 to 14:00 local time
+raw prerouting meta hour "03:00"-"14:00" counter accept
 -----------------------
 
 SOCKET EXPRESSION
@@ -304,43 +310,92 @@ table inet x {
 FIB EXPRESSIONS
 ~~~~~~~~~~~~~~~
 [verse]
-*fib* {*saddr* | *daddr* | *mark* | *iif* | *oif*} [*.* ...] {*oif* | *oifname* | *type*}
+*fib* 'FIB_TUPLE' 'FIB_RESULT'
+'FIB_TUPLE' := { *saddr* | *daddr*} [ *.* { *iif* | *oif* } *.* *mark* ]
+'FIB_RESULT'  := { *oif* | *oifname* | *type* }
 
-A fib expression queries the fib (forwarding information base) to obtain
-information such as the output interface index a particular address would use.
-The input is a tuple of elements that is used as input to the fib lookup
-functions.
 
-.fib expression specific types
+A fib expression queries the fib (forwarding information base) to obtain information
+such as the output interface index.
+
+The first arguments to the *fib* expression are the input keys to be passed to the fib lookup function.
+One of *saddr* or *daddr* is mandatory, they are also mutually exclusive.
+
+*mark*, *iif* and *oif* keywords are optional modifiers to influence the search result, see
+the *FIB_TUPLE* keyword table below for a description.
+The *iif* and *oif* tuple keywords are also mutually exclusive.
+
+The last argument to the *fib* expression is the desired result type.
+
+*oif* asks to obtain the interface index that would be used to send packets to the packets source
+(*saddr* key) or destination (*daddr* key).  If no routing entry is found, the returned interface
+index is 0.
+
+*oifname* is like *oif*, but it fills the interface name instead.  This is useful to check dynamic
+interfaces such as ppp devices.  If no entry is found, an empty interface name is returned.
+
+*type* returns the address type such as unicast or multicast.  A complete list of supported
+address types can be shown with *nft* *describe* *fib_addrtype*.
+
+.FIB_TUPLE keywords
 [options="header"]
 |==================
-|Keyword| Description| Type
-|oif|
-Output interface index|
-integer (32 bit)
-|oifname|
-Output interface name|
-string
-|type|
-Address type |
-fib_addrtype
+|flag| Description
+|daddr| Perform a normal route lookup: search fib for route to the *destination address* of the packet.
+|saddr| Perform a reverse route lookup: search the fib for route to the *source address* of the packet.
+|mark | consider the packet mark (nfmark) when querying the fib.
+|iif  | if fib lookups provides a route then check its output interface is identical to the packets *input* interface.
+|oif  | if fib lookups provides a route then check its output interface is identical to the packets *output* interface.  This flag can only be used with the *type* result.
 |=======================
 
-Use *nft* *describe* *fib_addrtype* to get a list of all address types.
+.FIB_RESULT keywords
+[options="header"]
+|==================
+|Keyword| Description| Result Type
+|oif|
+Output interface index|
+iface_index
+|oifname|
+Output interface name|
+ifname
+|type|
+Address type |
+fib_addrtype (see *nft* *describe* *fib_addrtype* for a list)
+|=======================
+
+The *oif* and *oifname* result is only valid in the *prerouting*, *input* and *forward* hooks.
+The *type* can be queried from any one of *prerouting*, *input*, *forward* *output* and *postrouting*.
+
+For *type*, the presence of the *iif* keyword in the 'FIB_TUPLE' modifiers restrict the available
+hooks to those where the packet is associated with an incoming interface, i.e. *prerouting*, *input* and *forward*.
+Likewise, the *oif* keyword in the 'FIB_TUPLE' modifier list will limit the available hooks to
+*forward*, *output* and *postrouting*.
 
 .Using fib expressions
 ----------------------
 # drop packets without a reverse path
 filter prerouting fib saddr . iif oif missing drop
 
-In this example, 'saddr . iif' looks up routing information based on the source address and the input interface.
-oif picks the output interface index from the routing information.
-If no route was found for the source address/input interface combination, the output interface index is zero.
-In case the input interface is specified as part of the input key, the output interface index is always the same as the input interface index or zero.
-If only 'saddr oif' is given, then oif can be any interface index or zero.
+In this example, 'saddr . iif' looks up a route to the *source address* of the packet and restricts matching
+results to the interface that the packet arrived on, then stores the output interface index from the obtained
+fib route result.
 
-# drop packets to address not configured on incoming interface
+If no route was found for the source address/input interface combination, the output interface index is zero.
+Hence, this rule will drop all packets that do not have a strict reverse path (hypothetical reply packet
+would be sent via the interface the tested packet arrived on).
+
+If only 'saddr oif' is used as the input key, then this rule would only drop packets where the fib cannot
+find a route. In most setups this will never drop packets because the default route is returned.
+
+# drop packets if the destination ip address is not configured on the incoming interface
 filter prerouting fib daddr . iif type != { local, broadcast, multicast } drop
+
+This queries the fib based on the current packets' destination address and the incoming interface.
+
+If the packet is sent to a unicast address that is configured on a different interface, then the packet
+will be dropped as such an address would be classified as 'unicast' type.
+Without the 'iif' modifier, any address configured on the local machine is 'local', and unicast addresses
+not configured on any interface would return the type 'unicast'.
 
 # perform lookup in a specific 'blackhole' table (0xdead, needs ip appropriate ip rule)
 filter prerouting meta mark set 0xdead fib daddr . mark type vmap { blackhole : drop, prohibit : jump prohibited, unreachable : drop }

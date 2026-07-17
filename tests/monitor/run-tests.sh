@@ -1,7 +1,6 @@
 #!/bin/bash
 
-cd $(dirname $0)
-nft=${NFT:-../../src/nft}
+nft=${NFT:-$(dirname $0)/../../src/nft}
 debug=false
 test_json=false
 
@@ -120,6 +119,14 @@ echo_run_test() {
 	return $rc
 }
 
+netns=true
+for arg in "$@"; do
+	[[ "$arg" == "--no-netns" ]] && netns=false
+done
+if $netns; then
+	exec unshare -n $0 --no-netns "$@"
+fi
+
 testcases=""
 while [ -n "$1" ]; do
 	case "$1" in
@@ -131,11 +138,14 @@ while [ -n "$1" ]; do
 		test_json=true
 		shift
 		;;
+	--no-netns)
+		shift
+		;;
 	-H|--host)
 		nft=nft
 		shift
 		;;
-	testcases/*.t)
+	*.t)
 		testcases+=" $1"
 		shift
 		;;
